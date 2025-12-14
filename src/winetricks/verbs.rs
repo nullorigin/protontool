@@ -177,8 +177,8 @@ fn execute_action(action: &VerbAction, wine_ctx: &WineContext, downloader: &Down
                 .env("PROTON_PATH", &wine_ctx.proton_path)
                 .env("W_TMP", tmp_dir)
                 .env("W_CACHE", downloader.cache_dir())
-                .env("W_SYSTEM32_DLLS", wine_ctx.prefix_path.join("drive_c/windows/system32"))
-                .env("W_SYSTEM64_DLLS", wine_ctx.prefix_path.join("drive_c/windows/syswow64"))
+                .env("W_SYSTEM32_DLLS", wine_ctx.prefix_path.join("drive_c/windows/syswow64"))
+                .env("W_SYSTEM64_DLLS", wine_ctx.prefix_path.join("drive_c/windows/system32"))
                 .status()
                 .map_err(|e| format!("Failed to run script: {}", e))?;
             if !status.success() {
