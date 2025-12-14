@@ -14,6 +14,10 @@ impl Downloader {
         }
     }
 
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
     pub fn download(&self, url: &str, filename: &str, expected_sha256: Option<&str>) -> Result<PathBuf, String> {
         let cached_path = self.cache_dir.join(filename);
         

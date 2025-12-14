@@ -14,7 +14,7 @@ fn install_desktop_entries() -> Result<PathBuf, String> {
 
     let desktop_content = r#"[Desktop Entry]
 Type=Application
-Name=protontool
+Name=Protontool
 Comment=Manage Wine/Proton prefixes and install Windows components
 Exec=protontool --gui --no-term
 Icon=wine
@@ -24,7 +24,7 @@ Categories=Utility;Game;
 
     let launch_content = r#"[Desktop Entry]
 Type=Application
-Name=protontool Launcher
+Name=Protontool Launch
 Comment=Launch Windows executables using Proton
 Exec=protontool-launch --no-term %f
 Icon=wine
@@ -34,7 +34,7 @@ MimeType=application/x-ms-dos-executable;application/x-msdos-program;
 "#;
 
     let desktop_path = applications_dir.join("protontool.desktop");
-    let launch_path = applications_dir.join("protontool-Launcher.desktop");
+    let launch_path = applications_dir.join("protontool-launch.desktop");
 
     fs::write(&desktop_path, desktop_content)
         .map_err(|e| format!("Failed to write desktop file: {}", e))?;
@@ -82,7 +82,7 @@ fn main() {
                 install_dir.display()
             );
             println!(
-                "The protontool shortcut and protontool Launcher desktop entries should now work."
+                "The protontool shortcut and protontool-launch desktop entries should now work."
             );
         }
         Err(e) => {

@@ -6,7 +6,7 @@ use crate::steam::{ProtonApp, SteamApp, SteamInstallation};
 use crate::util::which;
 use crate::winetricks::{Verb, VerbCategory};
 
-fn get_gui_tool() -> Option<std::path::PathBuf> {
+pub fn get_gui_tool() -> Option<std::path::PathBuf> {
     if let Some(provider) = config::get_gui_provider() {
         return which(&provider);
     }
@@ -64,25 +64,36 @@ pub fn select_steam_library_paths() -> Vec<PathBuf> {
     };
 
     loop {
-        // Ask if user wants to add a Steam library path
-        let question = Command::new(&gui_tool)
+        // Build list of current paths for display
+        let paths_display = if paths.is_empty() {
+            "(no additional paths added)".to_string()
+        } else {
+            paths.iter()
+                .map(|p| format!("  • {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        // Show dialog with Add and Next buttons
+        let output = Command::new(&gui_tool)
             .args([
                 "--question",
                 "--title", "Steam Library Paths",
                 "--text", &format!(
-                    "Would you like to add a Steam library folder?\n\n\
-                     Current extra paths: {}\n\n\
-                     Click Yes to add a path, No to continue.",
-                    if paths.is_empty() { "(none)".to_string() } else { paths.iter().map(|p: &PathBuf| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\n") }
+                    "Add additional Steam library folders?\n\n\
+                     Current paths:\n{}\n",
+                    paths_display
                 ),
+                "--ok-label", "Add Path",
+                "--cancel-label", "Next",
                 "--width", "500",
             ])
             .status();
 
-        match question {
+        match output {
             Ok(status) if status.success() => {
-                // User clicked Yes, show directory picker
-                let output = Command::new(&gui_tool)
+                // User clicked "Add Path", show directory picker
+                let dir_output = Command::new(&gui_tool)
                     .args([
                         "--file-selection",
                         "--directory",
@@ -90,37 +101,39 @@ pub fn select_steam_library_paths() -> Vec<PathBuf> {
                     ])
                     .output();
 
-                if let Ok(out) = output {
+                if let Ok(out) = dir_output {
                     if out.status.success() {
                         let path_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                        let path = PathBuf::from(&path_str);
-                        
-                        // Validate it looks like a Steam library
-                        if path.join("steamapps").exists() {
-                            if !paths.contains(&path) {
-                                paths.push(path);
+                        if !path_str.is_empty() {
+                            let path = PathBuf::from(&path_str);
+                            
+                            // Validate it looks like a Steam library
+                            if path.join("steamapps").exists() {
+                                if !paths.contains(&path) {
+                                    paths.push(path);
+                                }
+                            } else {
+                                // Warn user this doesn't look like a Steam library
+                                let _ = Command::new(&gui_tool)
+                                    .args([
+                                        "--warning",
+                                        "--title", "Invalid Path",
+                                        "--text", &format!(
+                                            "The selected folder doesn't appear to be a Steam library.\n\n\
+                                             No 'steamapps' folder found in:\n{}\n\n\
+                                             Please select a folder containing a 'steamapps' subdirectory.",
+                                            path_str
+                                        ),
+                                        "--width", "500",
+                                    ])
+                                    .status();
                             }
-                        } else {
-                            // Warn user this doesn't look like a Steam library
-                            let _ = Command::new(&gui_tool)
-                                .args([
-                                    "--warning",
-                                    "--title", "Invalid Path",
-                                    "--text", &format!(
-                                        "The selected folder doesn't appear to be a Steam library.\n\n\
-                                         No 'steamapps' folder found in:\n{}\n\n\
-                                         Please select a folder containing a 'steamapps' subdirectory.",
-                                        path_str
-                                    ),
-                                    "--width", "500",
-                                ])
-                                .status();
                         }
                     }
                 }
             }
             _ => {
-                // User clicked No or cancelled, stop asking
+                // User clicked "Next" or cancelled
                 break;
             }
         }

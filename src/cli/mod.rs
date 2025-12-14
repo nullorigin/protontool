@@ -48,6 +48,7 @@ pub fn main_cli(args: Option<Vec<String>>) {
     parser.add_option("create_prefix", &["--create-prefix"], "Create a new Wine prefix at the given path");
     parser.add_option("prefix", &["--prefix", "-p"], "Use an existing custom prefix path");
     parser.add_option("proton", &["--proton"], "Proton version to use (e.g., 'Proton 9.0')");
+    parser.add_option("arch", &["--arch"], "Prefix architecture: win32 or win64 (default: win64)");
     parser.add_flag("version", &["-V", "--version"], "Show version");
     parser.add_flag("help", &["-h", "--help"], "Show help");
 
@@ -100,10 +101,17 @@ pub fn main_cli(args: Option<Vec<String>>) {
         return;
     }
 
-    let action_count = [do_list_apps, do_gui, do_run_verbs, do_command, do_create_prefix, do_use_prefix]
-        .iter()
-        .filter(|&&x| x)
-        .count();
+    // Allow combining -c with --prefix (command mode with custom prefix)
+    let do_prefix_command = do_command && do_use_prefix;
+    
+    let action_count = if do_prefix_command {
+        1 // Treat prefix + command as single action
+    } else {
+        [do_list_apps, do_gui, do_run_verbs, do_command, do_create_prefix, do_use_prefix]
+            .iter()
+            .filter(|&&x| x)
+            .count()
+    };
 
     if action_count != 1 {
         eprintln!("Only one action can be performed at a time.");
@@ -117,6 +125,10 @@ pub fn main_cli(args: Option<Vec<String>>) {
         run_list_mode(&parsed, no_term);
     } else if do_run_verbs {
         run_verb_mode(appid.unwrap(), &verbs_to_run, &parsed, no_term);
+    } else if do_prefix_command {
+        let cmd = parsed.get_option("command").unwrap();
+        let prefix_path = parsed.get_option("prefix").unwrap();
+        run_prefix_command_mode(&prefix_path, &cmd, &parsed, no_term);
     } else if do_command {
         let cmd = parsed.get_option("command").unwrap();
         run_command_mode(appid, &cmd, &parsed, no_term);
@@ -280,18 +292,25 @@ fn run_gui_create_prefix(no_term: bool) {
         );
     }
 
+    // Let user select architecture
+    let arch = match select_arch_gui() {
+        Some(a) => a,
+        None => return,
+    };
+
     // Create the prefix
     println!("Creating Wine prefix at: {}", prefix_path.display());
     println!("Using Proton: {}", proton_app.name);
+    println!("Architecture: {}", arch.as_str());
 
     if let Err(e) = std::fs::create_dir_all(&prefix_path) {
         exit_with_error(&format!("Failed to create prefix directory: {}", e), no_term);
     }
 
-    let wine_ctx = crate::winetricks::WineContext::from_proton(&proton_app, &prefix_path);
+    let wine_ctx = crate::winetricks::WineContext::from_proton_with_arch(&proton_app, &prefix_path, arch);
     
     println!("Initializing prefix with wineboot...");
-    match wine_ctx.run_wine(&["wineboot", "--init"]) {
+    match wine_ctx.run_wine_no_cwd(&["wineboot", "--init"]) {
         Ok(output) => {
             if !output.status.success() {
                 eprintln!("Warning: wineboot returned non-zero exit code");
@@ -305,9 +324,10 @@ fn run_gui_create_prefix(no_term: bool) {
     // Save metadata
     let metadata_path = prefix_path.join(".protontool");
     let metadata = format!(
-        "proton_name={}\nproton_path={}\ncreated={}\n",
+        "proton_name={}\nproton_path={}\narch={}\ncreated={}\n",
         proton_app.name,
         proton_app.install_path.display(),
+        arch.as_str(),
         chrono_lite_now()
     );
     std::fs::write(&metadata_path, metadata).ok();
@@ -339,9 +359,11 @@ fn run_gui_manage_prefix(no_term: bool) {
 
     let steam_apps = get_steam_apps(&steam_root, &steam_path, &steam_lib_paths);
 
-    // Try to read saved Proton info
+    // Try to read saved Proton and arch info
     let metadata_path = prefix_path.join(".protontool");
-    let proton_app = if let Ok(metadata) = std::fs::read_to_string(&metadata_path) {
+    let metadata_content = std::fs::read_to_string(&metadata_path).ok();
+    
+    let proton_app = if let Some(ref metadata) = metadata_content {
         let proton_name = metadata.lines()
             .find(|l| l.starts_with("proton_name="))
             .and_then(|l| l.strip_prefix("proton_name="));
@@ -354,6 +376,13 @@ fn run_gui_manage_prefix(no_term: bool) {
     } else {
         None
     };
+    
+    // Read saved architecture (default to win64)
+    let saved_arch = metadata_content.as_ref()
+        .and_then(|m| m.lines().find(|l| l.starts_with("arch=")))
+        .and_then(|l| l.strip_prefix("arch="))
+        .and_then(crate::winetricks::WineArch::from_str)
+        .unwrap_or(crate::winetricks::WineArch::Win64);
 
     let proton_app = match proton_app {
         Some(app) => {
@@ -373,31 +402,140 @@ fn run_gui_manage_prefix(no_term: bool) {
         exit_with_error("Proton installation is not ready.", no_term);
     }
 
-    let verb_runner = Winetricks::new(&proton_app, &prefix_path);
+    let verb_runner = Winetricks::new_with_arch(&proton_app, &prefix_path, saved_arch);
+    let wine_ctx = crate::winetricks::WineContext::from_proton_with_arch(&proton_app, &prefix_path, saved_arch);
 
-    // Interactive verb selection
+    // Interactive action selection
     loop {
-        let category = match select_verb_category_gui() {
-            Some(cat) => cat,
-            None => return,
-        };
-
-        let verb_list = verb_runner.list_verbs(Some(category));
-        let selected = select_verbs_with_gui(&verb_list, Some(&format!("Select {} to install", category.as_str())));
-
-        if selected.is_empty() {
-            continue;
-        }
-
-        for verb_name in &selected {
-            println!("Running verb: {}", verb_name);
-            if let Err(e) = verb_runner.run_verb(verb_name) {
-                eprintln!("Error running {}: {}", verb_name, e);
+        // Show action menu
+        match select_prefix_action_gui() {
+            Some(PrefixAction::RunApplication) => {
+                if let Some(exe_path) = select_executable_gui() {
+                    println!("Running: {}", exe_path.display());
+                    // run_wine automatically changes to executable's directory
+                    match wine_ctx.run_wine(&[&exe_path.to_string_lossy()]) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("Error running application: {}", e),
+                    }
+                }
             }
-        }
+            Some(PrefixAction::InstallComponents) => {
+                let category = match select_verb_category_gui() {
+                    Some(cat) => cat,
+                    None => continue,
+                };
 
-        println!("Completed running verbs.");
+                let verb_list = verb_runner.list_verbs(Some(category));
+                let selected = select_verbs_with_gui(&verb_list, Some(&format!("Select {} to install", category.as_str())));
+
+                if selected.is_empty() {
+                    continue;
+                }
+
+                for verb_name in &selected {
+                    println!("Running verb: {}", verb_name);
+                    if let Err(e) = verb_runner.run_verb(verb_name) {
+                        eprintln!("Error running {}: {}", verb_name, e);
+                    }
+                }
+
+                println!("Completed running verbs.");
+            }
+            None => return,
+        }
     }
+}
+
+enum PrefixAction {
+    RunApplication,
+    InstallComponents,
+}
+
+fn select_prefix_action_gui() -> Option<PrefixAction> {
+    let gui_tool = crate::gui::get_gui_tool()?;
+    
+    let args = vec![
+        "--list",
+        "--title", "Select action",
+        "--column", "Action",
+        "--column", "Description",
+        "--print-column", "1",
+        "--width", "500",
+        "--height", "300",
+        "run", "Run an application",
+        "install", "Install components (DLLs, fonts, etc.)",
+    ];
+    
+    let output = std::process::Command::new(&gui_tool)
+        .args(&args)
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    
+    match selected.as_str() {
+        "run" => Some(PrefixAction::RunApplication),
+        "install" => Some(PrefixAction::InstallComponents),
+        _ => None,
+    }
+}
+
+fn select_executable_gui() -> Option<PathBuf> {
+    let gui_tool = crate::gui::get_gui_tool()?;
+    
+    let args = vec![
+        "--file-selection",
+        "--title", "Select executable to run",
+        "--file-filter", "Windows Executables | *.exe *.msi *.bat",
+    ];
+    
+    let output = std::process::Command::new(&gui_tool)
+        .args(&args)
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(path))
+    }
+}
+
+fn select_arch_gui() -> Option<crate::winetricks::WineArch> {
+    let gui_tool = crate::gui::get_gui_tool()?;
+    
+    let args = vec![
+        "--list",
+        "--title", "Select prefix architecture",
+        "--column", "Architecture",
+        "--column", "Description",
+        "--print-column", "1",
+        "--width", "500",
+        "--height", "250",
+        "win64", "64-bit Windows (recommended for modern apps)",
+        "win32", "32-bit Windows (for legacy apps)",
+    ];
+    
+    let output = std::process::Command::new(&gui_tool)
+        .args(&args)
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    crate::winetricks::WineArch::from_str(&selected)
 }
 
 fn run_list_mode(parsed: &util::ParsedArgs, no_term: bool) {
@@ -585,6 +723,91 @@ fn run_command_mode(appid: Option<u32>, command: &str, parsed: &util::ParsedArgs
     }
 }
 
+fn run_prefix_command_mode(prefix_path: &str, command: &str, parsed: &util::ParsedArgs, no_term: bool) {
+    let prefix_path = PathBuf::from(prefix_path);
+    
+    if !prefix_path.exists() {
+        exit_with_error(&format!("Prefix path does not exist: {}", prefix_path.display()), no_term);
+    }
+
+    let extra_libs = parsed.get_multi_option("steam_library").to_vec();
+    let (steam_path, steam_root, steam_lib_paths) = match get_steam_context(no_term, &extra_libs) {
+        Some(ctx) => ctx,
+        None => {
+            exit_with_error("No Steam installation was selected.", no_term);
+        }
+    };
+
+    let steam_apps = get_steam_apps(&steam_root, &steam_path, &steam_lib_paths);
+
+    // Try to read saved Proton and arch info from prefix metadata
+    let metadata_path = prefix_path.join(".protontool");
+    let metadata_content = std::fs::read_to_string(&metadata_path).ok();
+    
+    let proton_app = if let Some(ref metadata) = metadata_content {
+        let proton_name = metadata.lines()
+            .find(|l| l.starts_with("proton_name="))
+            .and_then(|l| l.strip_prefix("proton_name="));
+        
+        if let Some(name) = proton_name {
+            find_proton_by_name(&steam_apps, name)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    
+    // Read saved architecture (default to win64)
+    let saved_arch = metadata_content.as_ref()
+        .and_then(|m| m.lines().find(|l| l.starts_with("arch=")))
+        .and_then(|l| l.strip_prefix("arch="))
+        .and_then(crate::winetricks::WineArch::from_str)
+        .unwrap_or(crate::winetricks::WineArch::Win64);
+
+    // If no saved Proton or --proton flag specified, select one
+    let proton_app = if let Some(proton_name) = parsed.get_option("proton") {
+        match find_proton_by_name(&steam_apps, proton_name) {
+            Some(app) => app,
+            None => {
+                exit_with_error(&format!("Proton version '{}' not found.", proton_name), no_term);
+            }
+        }
+    } else if let Some(app) = proton_app {
+        println!("Using saved Proton version: {}", app.name);
+        app
+    } else {
+        match select_proton_with_gui(&get_proton_apps(&steam_apps)) {
+            Some(app) => app,
+            None => {
+                exit_with_error("No Proton version selected.", no_term);
+            }
+        }
+    };
+
+    if !proton_app.is_proton_ready {
+        exit_with_error("Proton installation is not ready.", no_term);
+    }
+
+    let wine_ctx = crate::winetricks::WineContext::from_proton_with_arch(&proton_app, &prefix_path, saved_arch);
+
+    // Run the command with wine
+    match wine_ctx.run_wine(&[command]) {
+        Ok(output) => {
+            if !output.stdout.is_empty() {
+                println!("{}", String::from_utf8_lossy(&output.stdout));
+            }
+            if !output.stderr.is_empty() {
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+            }
+            process::exit(output.status.code().unwrap_or(0));
+        }
+        Err(e) => {
+            exit_with_error(&format!("Failed to run command: {}", e), no_term);
+        }
+    }
+}
+
 fn run_create_prefix_mode(prefix_path: &str, parsed: &util::ParsedArgs, no_term: bool) {
     let extra_libs = parsed.get_multi_option("steam_library").to_vec();
     let (steam_path, steam_root, steam_lib_paths) = match get_steam_context(no_term, &extra_libs) {
@@ -631,20 +854,26 @@ fn run_create_prefix_mode(prefix_path: &str, parsed: &util::ParsedArgs, no_term:
 
     let prefix_path = PathBuf::from(prefix_path);
     
+    // Parse architecture option (default to win64)
+    let arch = parsed.get_option("arch")
+        .and_then(|s| crate::winetricks::WineArch::from_str(s))
+        .unwrap_or(crate::winetricks::WineArch::Win64);
+    
     // Create the prefix directory structure
     println!("Creating Wine prefix at: {}", prefix_path.display());
     println!("Using Proton: {}", proton_app.name);
+    println!("Architecture: {}", arch.as_str());
 
     if let Err(e) = std::fs::create_dir_all(&prefix_path) {
         exit_with_error(&format!("Failed to create prefix directory: {}", e), no_term);
     }
 
     // Initialize the prefix with Proton's wine
-    let wine_ctx = crate::winetricks::WineContext::from_proton(&proton_app, &prefix_path);
+    let wine_ctx = crate::winetricks::WineContext::from_proton_with_arch(&proton_app, &prefix_path, arch);
     
     // Run wineboot to initialize the prefix
     println!("Initializing prefix with wineboot...");
-    match wine_ctx.run_wine(&["wineboot", "--init"]) {
+    match wine_ctx.run_wine_no_cwd(&["wineboot", "--init"]) {
         Ok(output) => {
             if !output.status.success() {
                 eprintln!("Warning: wineboot returned non-zero exit code");
@@ -661,9 +890,10 @@ fn run_create_prefix_mode(prefix_path: &str, parsed: &util::ParsedArgs, no_term:
     // Save prefix metadata for future use
     let metadata_path = prefix_path.join(".protontool");
     let metadata = format!(
-        "proton_name={}\nproton_path={}\ncreated={}\n",
+        "proton_name={}\nproton_path={}\narch={}\ncreated={}\n",
         proton_app.name,
         proton_app.install_path.display(),
+        arch.as_str(),
         chrono_lite_now()
     );
     std::fs::write(&metadata_path, metadata).ok();
@@ -692,9 +922,11 @@ fn run_custom_prefix_mode(prefix_path: &str, verbs: &[String], parsed: &util::Pa
     let steam_apps = get_steam_apps(&steam_root, &steam_path, &steam_lib_paths);
     let proton_apps = get_proton_apps(&steam_apps);
 
-    // Try to read saved Proton info from prefix metadata
+    // Try to read saved Proton and arch info from prefix metadata
     let metadata_path = prefix_path.join(".protontool");
-    let proton_app = if let Ok(metadata) = std::fs::read_to_string(&metadata_path) {
+    let metadata_content = std::fs::read_to_string(&metadata_path).ok();
+    
+    let proton_app = if let Some(ref metadata) = metadata_content {
         let proton_name = metadata.lines()
             .find(|l| l.starts_with("proton_name="))
             .and_then(|l| l.strip_prefix("proton_name="));
@@ -707,6 +939,13 @@ fn run_custom_prefix_mode(prefix_path: &str, verbs: &[String], parsed: &util::Pa
     } else {
         None
     };
+    
+    // Read saved architecture (default to win64)
+    let saved_arch = metadata_content.as_ref()
+        .and_then(|m| m.lines().find(|l| l.starts_with("arch=")))
+        .and_then(|l| l.strip_prefix("arch="))
+        .and_then(crate::winetricks::WineArch::from_str)
+        .unwrap_or(crate::winetricks::WineArch::Win64);
 
     // If no saved Proton or --proton flag specified, select one
     let proton_app = if let Some(proton_name) = parsed.get_option("proton") {
@@ -732,7 +971,7 @@ fn run_custom_prefix_mode(prefix_path: &str, verbs: &[String], parsed: &util::Pa
         exit_with_error("Proton installation is not ready.", no_term);
     }
 
-    let verb_runner = Winetricks::new(&proton_app, &prefix_path);
+    let verb_runner = Winetricks::new_with_arch(&proton_app, &prefix_path, saved_arch);
 
     if verbs.is_empty() {
         // Interactive mode - show verb selection

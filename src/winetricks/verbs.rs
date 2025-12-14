@@ -10,6 +10,7 @@ pub enum VerbCategory {
     Dll,
     Font,
     Setting,
+    Custom,
 }
 
 impl VerbCategory {
@@ -19,7 +20,18 @@ impl VerbCategory {
             VerbCategory::Dll => "dlls",
             VerbCategory::Font => "fonts",
             VerbCategory::Setting => "settings",
+            VerbCategory::Custom => "custom",
         }
+    }
+    
+    pub fn all() -> &'static [VerbCategory] {
+        &[
+            VerbCategory::App,
+            VerbCategory::Dll,
+            VerbCategory::Font,
+            VerbCategory::Setting,
+            VerbCategory::Custom,
+        ]
     }
 }
 
@@ -59,11 +71,30 @@ impl DownloadFile {
     }
 }
 
+/// A local file path for offline installation (paid/licensed software)
+#[derive(Debug, Clone)]
+pub struct LocalFile {
+    pub path: std::path::PathBuf,
+    pub name: String,
+}
+
+impl LocalFile {
+    pub fn new(path: &std::path::Path, name: &str) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            name: name.to_string(),
+        }
+    }
+}
+
 pub type CustomAction = fn(&WineContext, &Downloader, &Path) -> Result<(), String>;
+pub type BoxedAction = Box<dyn Fn(&WineContext, &Downloader, &Path) -> Result<(), String> + Send + Sync>;
 
 #[derive(Clone)]
 pub enum VerbAction {
     RunInstaller { file: DownloadFile, args: Vec<String> },
+    RunLocalInstaller { file: LocalFile, args: Vec<String> },
+    RunScript { script_path: std::path::PathBuf },
     Extract { file: DownloadFile, dest: String },
     ExtractCab { file: DownloadFile, dest: String, filter: Option<String> },
     Override { dll: String, mode: DllOverride },
@@ -123,6 +154,37 @@ fn execute_action(action: &VerbAction, wine_ctx: &WineContext, downloader: &Down
             wine_ctx.run_wine(&refs).map_err(|e| e.to_string())?;
             wine_ctx.wait_for_wineserver().ok();
         }
+        VerbAction::RunLocalInstaller { file, args } => {
+            if !file.path.exists() {
+                return Err(format!("Local installer not found: {} ({})\nPlace the installer at this path for offline installation.", file.name, file.path.display()));
+            }
+            let mut cmd_args: Vec<String> = vec![file.path.to_string_lossy().to_string()];
+            cmd_args.extend(args.clone());
+            let refs: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+            wine_ctx.run_wine(&refs).map_err(|e| e.to_string())?;
+            wine_ctx.wait_for_wineserver().ok();
+        }
+        VerbAction::RunScript { script_path } => {
+            if !script_path.exists() {
+                return Err(format!("Script not found: {}", script_path.display()));
+            }
+            // Set up environment for the script
+            let status = std::process::Command::new("bash")
+                .arg(script_path)
+                .env("WINEPREFIX", &wine_ctx.prefix_path)
+                .env("WINE", &wine_ctx.wine_path)
+                .env("WINESERVER", &wine_ctx.wineserver_path)
+                .env("PROTON_PATH", &wine_ctx.proton_path)
+                .env("W_TMP", tmp_dir)
+                .env("W_CACHE", downloader.cache_dir())
+                .env("W_SYSTEM32_DLLS", wine_ctx.prefix_path.join("drive_c/windows/system32"))
+                .env("W_SYSTEM64_DLLS", wine_ctx.prefix_path.join("drive_c/windows/syswow64"))
+                .status()
+                .map_err(|e| format!("Failed to run script: {}", e))?;
+            if !status.success() {
+                return Err(format!("Script exited with code: {}", status.code().unwrap_or(-1)));
+            }
+        }
         VerbAction::Extract { file, dest } => {
             let local = downloader.download(&file.url, &file.filename, file.sha256.as_deref())?;
             let dest_path = wine_ctx.prefix_path.join(dest);
@@ -177,6 +239,12 @@ impl VerbRegistry {
         register_fonts(&mut registry);
         register_dlls(&mut registry);
         register_apps(&mut registry);
+        
+        // Load user-defined custom verbs
+        for verb in super::custom::load_custom_verbs() {
+            registry.register(verb);
+        }
+        
         registry
     }
 

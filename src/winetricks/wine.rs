@@ -4,6 +4,36 @@ use std::process::{Command, Output};
 
 use crate::steam::ProtonApp;
 
+/// Wine prefix architecture
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WineArch {
+    Win32,
+    Win64,
+}
+
+impl WineArch {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WineArch::Win32 => "win32",
+            WineArch::Win64 => "win64",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "win32" | "32" | "x86" => Some(WineArch::Win32),
+            "win64" | "64" | "x64" => Some(WineArch::Win64),
+            _ => None,
+        }
+    }
+}
+
+impl Default for WineArch {
+    fn default() -> Self {
+        WineArch::Win64
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WineContext {
     pub wine_path: PathBuf,
@@ -11,12 +41,17 @@ pub struct WineContext {
     pub wine64_path: PathBuf,
     pub prefix_path: PathBuf,
     pub proton_path: PathBuf,
+    pub arch: WineArch,
     pub dll_overrides: HashMap<String, String>,
     env: HashMap<String, String>,
 }
 
 impl WineContext {
     pub fn from_proton(proton_app: &ProtonApp, prefix_path: &Path) -> Self {
+        Self::from_proton_with_arch(proton_app, prefix_path, WineArch::Win64)
+    }
+
+    pub fn from_proton_with_arch(proton_app: &ProtonApp, prefix_path: &Path, arch: WineArch) -> Self {
         let proton_dist = proton_app.install_path.join("dist");
         let proton_files = proton_app.install_path.join("files");
         
@@ -47,7 +82,7 @@ impl WineContext {
             lib_dir.join("lib/wine").to_string_lossy()
         ));
         env.insert("WINELOADER".to_string(), wine_path.to_string_lossy().to_string());
-        env.insert("WINEARCH".to_string(), "win64".to_string());
+        env.insert("WINEARCH".to_string(), arch.as_str().to_string());
 
         Self {
             wine_path,
@@ -55,6 +90,7 @@ impl WineContext {
             wine64_path,
             prefix_path: prefix_path.to_path_buf(),
             proton_path: proton_app.install_path.clone(),
+            arch,
             dll_overrides: HashMap::new(),
             env,
         }
@@ -90,9 +126,46 @@ impl WineContext {
         }
     }
 
+    /// Run wine with the given arguments.
+    /// By default, changes to the executable's directory if the first arg is a path to an executable.
     pub fn run_wine(&self, args: &[&str]) -> std::io::Result<Output> {
+        self.run_wine_ex(args, None, true)
+    }
+
+    /// Run wine without changing the working directory.
+    pub fn run_wine_no_cwd(&self, args: &[&str]) -> std::io::Result<Output> {
+        self.run_wine_ex(args, None, false)
+    }
+
+    /// Run wine with explicit working directory.
+    pub fn run_wine_cwd(&self, args: &[&str], cwd: &Path) -> std::io::Result<Output> {
+        self.run_wine_ex(args, Some(cwd), true)
+    }
+
+    /// Run wine with full control over working directory behavior.
+    /// - `cwd`: Explicit working directory, or None to auto-detect from first arg
+    /// - `auto_cwd`: If true and cwd is None, change to executable's directory
+    pub fn run_wine_ex(&self, args: &[&str], cwd: Option<&Path>, auto_cwd: bool) -> std::io::Result<Output> {
         let mut cmd = Command::new(&self.wine_path);
         cmd.args(args);
+        
+        // Determine working directory
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        } else if auto_cwd {
+            // Auto-detect from first argument if it's an executable path
+            if let Some(first_arg) = args.first() {
+                let path = Path::new(first_arg);
+                if path.is_absolute() || first_arg.contains('/') || first_arg.contains('\\') {
+                    if let Some(parent) = path.parent() {
+                        if parent.exists() {
+                            cmd.current_dir(parent);
+                        }
+                    }
+                }
+            }
+        }
+        
         self.apply_env(&mut cmd);
         cmd.output()
     }

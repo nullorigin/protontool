@@ -3,13 +3,14 @@ pub mod download;
 pub mod wine;
 pub mod registry;
 pub mod util;
+pub mod custom;
 
 use std::path::{Path, PathBuf};
 
 use crate::steam::ProtonApp;
 
 pub use verbs::{Verb, VerbCategory, VerbRegistry};
-pub use wine::WineContext;
+pub use wine::{WineContext, WineArch};
 
 pub fn get_winetricks_path() -> Option<PathBuf> {
     get_external_winetricks_path()
@@ -34,7 +35,11 @@ pub struct Winetricks {
 
 impl Winetricks {
     pub fn new(proton_app: &ProtonApp, prefix_path: &Path) -> Self {
-        let wine_ctx = WineContext::from_proton(proton_app, prefix_path);
+        Self::new_with_arch(proton_app, prefix_path, wine::WineArch::Win64)
+    }
+    
+    pub fn new_with_arch(proton_app: &ProtonApp, prefix_path: &Path, arch: wine::WineArch) -> Self {
+        let wine_ctx = WineContext::from_proton_with_arch(proton_app, prefix_path, arch);
         
         let cache_dir = crate::config::get_cache_dir().join("winetricks");
         std::fs::create_dir_all(&cache_dir).ok();
