@@ -1,0 +1,34 @@
+[package]
+name = "protontool"
+version = "0.1.0"
+edition = "2021"
+authors = ["Matthew Fay"]
+description = "A tool for configuring Wine/Proton prefixes to be used with Proton/Steam"
+license = "MIT"
+repository = "https://github.com/nullorigin/protontool"
+readme = "README.md"
+keywords = ["wine", "proton", "steam", "prefix", "configuration"]
+categories = ["command-line-utilities", "development-tools"]
+
+[features]
+default = []
+custom_steam_dir = []
+custom_gui_provider = []
+custom_steam_runtime = []
+
+[[bin]]
+name = "protontool"
+path = "src/main.rs"
+
+[[bin]]
+name = "protontool-launch"
+path = "src/bin/launch.rs"
+
+[[bin]]
+name = "protontool-desktop-install"
+path = "src/bin/desktop_install.rs"
+
+[profile.release]
+lto = true
+opt-level = "z"
+strip = true
