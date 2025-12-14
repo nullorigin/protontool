@@ -1,6 +1,6 @@
 # protontool
 
-A tool for managing Wine/Proton prefixes with built-in component installation (DLLs, fonts, settings) for Steam Play games and custom prefixes.
+A tool for managing Wine/Proton prefixes with built-in component installation (DLLs, fonts, settings) for Steam games and custom prefixes.
 
 ## Building
 
@@ -113,14 +113,6 @@ src/
     └── vdict.rs         # VDF dictionary structure
 ```
 
-## Differences from Python Version
-
-- **Linux-only**: Windows and macOS support removed
-- **No Flatpak/Snapd**: Container support removed for simplicity
-- **Built-in verbs**: No external winetricks script needed
-- **No external dependencies**: Pure Rust with stdlib only
-- **Compile-time configuration**: Feature flags for custom paths
-
 ## Requirements
 
 - Rust 1.70+ (for building)
@@ -130,4 +122,4 @@ src/
 
 ## License
 
-GPL-3.0 (same as original protontool)
+MIT
