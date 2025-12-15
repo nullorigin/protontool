@@ -1,6 +1,15 @@
 # protontool
 
-A tool for managing Wine/Proton prefixes with built-in component installation (DLLs, fonts, settings) for Steam games and custom prefixes.
+A comprehensive tool for managing Wine/Proton prefixes with built-in component installation (DLLs, fonts, runtimes, applications), custom verb creation, intelligent error detection, and Steam game integration.
+
+## Features
+
+- **Prefix Management** - Create, configure, and manage Wine/Proton prefixes for Steam games and standalone applications
+- **Built-in Verbs** - Install common components like vcrun, dotnet, dxvk, fonts, and more
+- **Custom Verbs** - Create and share your own installation verbs via TOML files
+- **Smart Logging** - Automatic detection and explanation of Wine errors with a curated database of known issues
+- **GUI Support** - Interactive dialogs via zenity or yad for prefix selection, verb installation, and verb creation
+- **Steam Integration** - Automatic detection of Steam libraries, games, and Proton versions
 
 ## Building
 
@@ -11,7 +20,7 @@ cargo build --release
 The binaries will be placed in `target/release/`:
 
 - `protontool` - Main CLI tool
-- `protontool-launch` - Launch Windows executables
+- `protontool-launch` - Launch Windows executables  
 - `protontool-desktop-install` - Install desktop shortcuts
 
 ## Usage
@@ -34,10 +43,23 @@ protontool -s GAME_NAME
 protontool -l
 ```
 
+### List available verbs
+
+```bash
+protontool --list-verbs
+```
+
 ### Launch GUI
 
 ```bash
 protontool --gui
+```
+
+### Prefix Manager GUI
+
+```bash
+protontool -p           # Select from installed games
+protontool -p APPID     # Manage specific game's prefix
 ```
 
 ### Run a custom command
@@ -51,6 +73,73 @@ protontool -c "wine myapp.exe" APPID
 ```bash
 protontool-launch /path/to/app.exe
 protontool-launch --appid APPID /path/to/app.exe
+```
+
+## Custom Verbs
+
+Create your own installation verbs using TOML files in `~/.protontool/verb/`.
+
+### Example: Simple Verb
+
+```toml
+[verb]
+name = "myapp"
+description = "Install My Application"
+category = "apps"
+
+[[actions]]
+type = "download"
+url = "https://example.com/installer.exe"
+filename = "installer.exe"
+
+[[actions]]
+type = "run"
+executable = "installer.exe"
+args = ["/S"]
+```
+
+### Example: Advanced Verb with Registry
+
+```toml
+[verb]
+name = "tweaks"
+description = "Apply performance tweaks"
+category = "settings"
+
+[[actions]]
+type = "reg"
+path = "HKCU\\Software\\Wine\\Direct3D"
+name = "UseGLSL"
+value = "enabled"
+```
+
+### Verb Actions
+
+| Action | Description |
+|--------|-------------|
+| `download` | Download a file from URL |
+| `run` | Execute a Windows program |
+| `copy` | Copy files to prefix |
+| `reg` | Set registry values |
+| `override` | Set DLL overrides |
+| `winecfg` | Apply winecfg settings |
+
+## Logging
+
+Protontool automatically logs all Wine output and detects known errors:
+
+- Logs stored in `~/.protontool/log/`
+- Automatic log rotation (5MB max, keeps 5 backups)
+- Known error detection with human-readable explanations
+- Covers Wine SEH exceptions, HRESULT codes, NTSTATUS codes, and common patterns
+
+### Example Error Output
+
+```text
+┌─ wine ─────────────────────────────────────────
+│ Code: WINE-SEH-NODLL
+│ Details: DLL not found - missing dependency
+└────────────────────────────────────────────────
 ```
 
 ## Compile-time Configuration
@@ -90,35 +179,85 @@ protontool_STEAM_RUNTIME_PATH=/custom/runtime \
 | `STEAM_APP_PATH` | Path to the game's installation directory |
 | `PROTON_PATH` | Path to the Proton installation |
 
+## Directory Structure
+
+Protontool uses `~/.protontool/` for all user data:
+
+```text
+~/.protontool/
+├── verb/       # Custom verb TOML files
+├── pfx/        # Custom (non-Steam) prefixes
+├── tmp/        # Temporary downloads
+└── log/        # Log files with rotation
+```
+
 ## Project Structure
 
-```rust
+```text
 src/
 ├── main.rs              # protontool entry point
-├── lib.rs               # library root
+├── lib.rs               # Library root
 ├── bin/
-│   ├── launch.rs        # protontool-launch
+│   ├── launch.rs        # protontool-launch binary
 │   └── desktop_install.rs
 ├── cli/
-│   ├── mod.rs           # CLI logic and mode handlers
-│   └── util.rs          # Argument parsing, logging
-├── config.rs            # Configuration and defaults
+│   ├── mod.rs           # CLI logic, GUI handlers, verb creator
+│   └── util.rs          # Argument parsing
+├── config.rs            # Configuration and path defaults
 ├── gui.rs               # Zenity/YAD dialog wrappers
+├── log.rs               # Logging with error detection
+├── wine_data.rs         # Auto-generated Wine debug data
 ├── steam.rs             # Steam installation detection
 ├── util.rs              # Utilities (run_command, which, etc.)
-├── winetricks/          # Built-in verb installation system
-└── vdf/
-    ├── mod.rs
-    ├── parser.rs        # Valve Data Format parser
-    └── vdict.rs         # VDF dictionary structure
+├── vdf/
+│   ├── mod.rs
+│   ├── parser.rs        # Valve Data Format parser
+│   └── vdict.rs         # VDF dictionary structure
+└── winetricks/
+    ├── mod.rs           # Winetricks module root
+    ├── wine.rs          # WineContext for prefix operations
+    ├── verbs.rs         # Built-in verb registry
+    ├── custom.rs        # Custom TOML verb loader
+    ├── download.rs      # File download utilities
+    └── ...
+
+tools/
+└── wine-extract/        # Dev tool for Wine source extraction
+    ├── src/main.rs
+    ├── Cargo.toml
+    └── README.md
 ```
+
+## Development Tools
+
+### wine-extract
+
+A development tool to extract debug information from Wine/Proton source code and regenerate `wine_data.rs`:
+
+```bash
+cd tools/wine-extract
+cargo build --release
+
+# Regenerate wine_data.rs from Wine source
+./target/release/wine-extract \
+    --wine-path /path/to/wine \
+    --output ../../src/wine_data.rs \
+    protontool
+```
+
+This extracts:
+
+- **539+ debug channels** from Wine DLLs
+- Curated error patterns for known Wine/Proton issues
+
+Use this when Valve updates their Wine fork to pick up new debug channels.
 
 ## Requirements
 
 - Rust 1.70+ (for building)
-- Steam
-- Proton
+- Steam with Proton installed
 - `zenity` or `yad` (for GUI dialogs)
+- `curl` or `wget` (for verb downloads)
 
 ## License
 
