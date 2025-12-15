@@ -6,5 +6,5 @@ pub mod log;
 pub mod steam;
 pub mod util;
 pub mod vdf;
-pub mod winetricks;
+pub mod wine;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

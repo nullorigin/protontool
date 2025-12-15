@@ -62,6 +62,19 @@ protontool -p           # Select from installed games
 protontool -p APPID     # Manage specific game's prefix
 ```
 
+### Create a Custom Prefix
+
+```bash
+protontool --create-prefix ~/MyPrefix --proton 'Proton 9.0'
+protontool --create-prefix ~/MyPrefix --proton 'Proton 9.0' --arch win32
+```
+
+### Delete a Custom Prefix
+
+```bash
+protontool --delete-prefix ~/MyPrefix
+```
+
 ### Run a custom command
 
 ```bash
@@ -213,11 +226,11 @@ src/
 │   ├── mod.rs
 │   ├── parser.rs        # Valve Data Format parser
 │   └── vdict.rs         # VDF dictionary structure
-└── winetricks/
-    ├── mod.rs           # Winetricks module root
-    ├── wine.rs          # WineContext for prefix operations
+└── wine/
+    ├── mod.rs           # Wine module root, WineContext
     ├── verbs.rs         # Built-in verb registry
     ├── custom.rs        # Custom TOML verb loader
+    ├── registry.rs      # Windows registry operations
     ├── download.rs      # File download utilities
     └── ...
 

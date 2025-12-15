@@ -24,7 +24,7 @@ pub fn is_steamos() -> bool {
 }
 
 pub fn run_command(
-    _winetricks_path: &Path,
+    _wine_path: &Path,
     proton_app: &crate::steam::ProtonApp,
     steam_app: &crate::steam::SteamApp,
     use_steam_runtime: bool,

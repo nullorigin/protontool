@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use crate::config;
 use crate::steam::{ProtonApp, SteamApp, SteamInstallation};
 use crate::util::which;
-use crate::winetricks::{Verb, VerbCategory};
+use crate::wine::{Verb, VerbCategory};
 
 pub fn get_gui_tool() -> Option<std::path::PathBuf> {
     if let Some(provider) = config::get_gui_provider() {
@@ -462,6 +462,7 @@ pub fn select_prefix_location_gui(default_name: &str) -> Option<PathBuf> {
 pub enum GuiAction {
     ManageGame,
     CreatePrefix,
+    DeletePrefix,
     ManagePrefix,
 }
 
@@ -476,9 +477,10 @@ pub fn show_main_menu_gui() -> Option<GuiAction> {
         "--column", "Description",
         "--print-column", "1",
         "--width", "500",
-        "--height", "300",
+        "--height", "350",
         "game", "Manage a Steam game prefix",
         "create", "Create a new custom prefix",
+        "delete", "Delete a custom prefix",
         "prefix", "Manage an existing custom prefix",
     ];
     
@@ -496,6 +498,7 @@ pub fn show_main_menu_gui() -> Option<GuiAction> {
     match selected.as_str() {
         "game" => Some(GuiAction::ManageGame),
         "create" => Some(GuiAction::CreatePrefix),
+        "delete" => Some(GuiAction::DeletePrefix),
         "prefix" => Some(GuiAction::ManagePrefix),
         _ => None,
     }

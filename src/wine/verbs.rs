@@ -507,7 +507,7 @@ fn register_dlls(registry: &mut VerbRegistry) {
     registry.register(Verb::new("dxvk", VerbCategory::Dll, "DXVK (latest)", "Philip Rebohle", "2024")
         .with_actions(vec![VerbAction::Custom(|wine_ctx, downloader, tmp_dir| {
             let file = downloader.download("https://github.com/doitsujin/dxvk/releases/download/v2.5.3/dxvk-2.5.3.tar.gz", "dxvk-2.5.3.tar.gz", None)?;
-            crate::winetricks::util::extract_archive(&file, tmp_dir)?;
+            crate::wine::util::extract_archive(&file, tmp_dir)?;
             let dxvk = tmp_dir.join("dxvk-2.5.3");
             let sys32 = wine_ctx.prefix_path.join("drive_c/windows/system32");
             let syswow = wine_ctx.prefix_path.join("drive_c/windows/syswow64");
@@ -615,7 +615,7 @@ fn register_dlls(registry: &mut VerbRegistry) {
     registry.register(Verb::new("vkd3d", VerbCategory::Dll, "vkd3d (Vulkan D3D12)", "Hans-Kristian Arntzen", "2024")
         .with_actions(vec![VerbAction::Custom(|wine_ctx, downloader, tmp_dir| {
             let file = downloader.download("https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v2.13/vkd3d-proton-2.13.tar.zst", "vkd3d-proton-2.13.tar.zst", None)?;
-            crate::winetricks::util::extract_archive(&file, tmp_dir)?;
+            crate::wine::util::extract_archive(&file, tmp_dir)?;
             let vkd3d = tmp_dir.join("vkd3d-proton-2.13");
             let sys32 = wine_ctx.prefix_path.join("drive_c/windows/system32");
             let syswow = wine_ctx.prefix_path.join("drive_c/windows/syswow64");
@@ -634,7 +634,7 @@ fn register_dlls(registry: &mut VerbRegistry) {
     registry.register(Verb::new("faudio", VerbCategory::Dll, "FAudio (XAudio reimplementation)", "Kron4ek", "2020")
         .with_actions(vec![VerbAction::Custom(|wine_ctx, downloader, tmp_dir| {
             let file = downloader.download("https://github.com/Kron4ek/FAudio-Builds/releases/download/20.07/faudio-20.07.tar.xz", "faudio-20.07.tar.xz", None)?;
-            crate::winetricks::util::extract_archive(&file, tmp_dir)?;
+            crate::wine::util::extract_archive(&file, tmp_dir)?;
             let faudio = tmp_dir.join("faudio-20.07");
             let sys32 = wine_ctx.prefix_path.join("drive_c/windows/system32");
             let syswow = wine_ctx.prefix_path.join("drive_c/windows/syswow64");
@@ -706,7 +706,7 @@ fn register_dlls(registry: &mut VerbRegistry) {
         .with_actions(vec![VerbAction::Custom(|wine_ctx, downloader, tmp_dir| {
             // Download from a known source
             let file = downloader.download("https://github.com/AlicanAky662/d3dcompiler_47/releases/download/2024.12.08/d3dcompiler_47.zip", "d3dcompiler_47.zip", None)?;
-            crate::winetricks::util::extract_archive(&file, tmp_dir)?;
+            crate::wine::util::extract_archive(&file, tmp_dir)?;
             let sys32 = wine_ctx.prefix_path.join("drive_c/windows/system32");
             let syswow = wine_ctx.prefix_path.join("drive_c/windows/syswow64");
             if syswow.exists() {
@@ -788,10 +788,10 @@ fn register_dlls(registry: &mut VerbRegistry) {
         }]));
 
     // DXVK versioned - helper function
-    fn install_dxvk(wine_ctx: &crate::winetricks::WineContext, downloader: &crate::winetricks::download::Downloader, tmp_dir: &std::path::Path, version: &str, url: &str) -> Result<(), String> {
+    fn install_dxvk(wine_ctx: &crate::wine::WineContext, downloader: &crate::wine::download::Downloader, tmp_dir: &std::path::Path, version: &str, url: &str) -> Result<(), String> {
         let filename = format!("dxvk-{}.tar.gz", version);
         let file = downloader.download(url, &filename, None)?;
-        crate::winetricks::util::extract_archive(&file, tmp_dir)?;
+        crate::wine::util::extract_archive(&file, tmp_dir)?;
         let dxvk = tmp_dir.join(format!("dxvk-{}", version));
         let sys32 = wine_ctx.prefix_path.join("drive_c/windows/system32");
         let syswow = wine_ctx.prefix_path.join("drive_c/windows/syswow64");

@@ -49,7 +49,7 @@ impl<'a> RegistryEditor<'a> {
 
     fn apply_reg_content(&self, content: &str) -> Result<(), String> {
         let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join("winetricks_reg_patch.reg");
+        let temp_file = temp_dir.join("protontool_reg_patch.reg");
         
         std::fs::write(&temp_file, content)
             .map_err(|e| format!("Failed to write temp registry file: {}", e))?;

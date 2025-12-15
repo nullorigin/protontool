@@ -6,8 +6,8 @@ pub mod log;
 pub mod steam;
 pub mod util;
 pub mod vdf;
-pub mod winetricks;
-pub use winetricks::*;
+pub mod wine;
+pub use wine::*;
 pub use cli::main_cli;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

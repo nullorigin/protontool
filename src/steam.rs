@@ -268,11 +268,13 @@ pub fn find_legacy_steam_runtime_path(steam_root: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Get all available Proton installations
+/// Get all available Proton installations (deduplicated by appid)
 pub fn get_proton_apps(steam_apps: &[SteamApp]) -> Vec<ProtonApp> {
+    let mut seen_appids = std::collections::HashSet::new();
     steam_apps
         .iter()
         .filter(|app| app.is_proton)
+        .filter(|app| seen_appids.insert(app.appid)) // Only keep first occurrence
         .map(|app| {
             let proton_dist = app.install_path.join("dist");
             let proton_files = app.install_path.join("files");
