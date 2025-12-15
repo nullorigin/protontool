@@ -5,9 +5,11 @@ pub mod util;
 pub mod custom;
 
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::process::{Command, Output};
 
 use crate::steam::ProtonApp;
-
+use crate::log as ptlog;
 pub use verbs::{Verb, VerbCategory, VerbRegistry};
 
 pub struct Wine {
@@ -51,11 +53,6 @@ impl Wine {
         self.verb_registry.search(query)
     }
 }
-
-use std::collections::HashMap;
-use std::process::{Command, Output};
-
-use crate::{log as ptlog, wine};
 
 /// Wine prefix architecture
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

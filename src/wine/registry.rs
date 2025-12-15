@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::wine::WineContext;
+use super::WineContext;
 
 pub struct RegistryEditor<'a> {
     wine_ctx: &'a WineContext,

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::download::Downloader;
-use super::wine::WineContext;
+use super::WineContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerbCategory {
