@@ -411,8 +411,8 @@ pub fn select_prefix_location_gui(default_name: &str) -> Option<PathBuf> {
     let gui_tool = get_gui_tool()?;
     
     // First ask if they want the default location or custom
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home".to_string());
-    let default_path = format!("{}/.local/share/protontool-prefixes/{}", home, default_name);
+    let prefixes_dir = crate::config::get_prefixes_dir();
+    let default_path = prefixes_dir.join(default_name).to_string_lossy().to_string();
     
     let question = Command::new(&gui_tool)
         .args([
@@ -439,7 +439,7 @@ pub fn select_prefix_location_gui(default_name: &str) -> Option<PathBuf> {
                     "--directory",
                     "--save",
                     "--title", "Select location for new prefix",
-                    "--filename", &format!("{}/", home),
+                    "--filename", &format!("{}/", prefixes_dir.display()),
                 ])
                 .output()
                 .ok()?;

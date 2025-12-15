@@ -1,6 +1,8 @@
 pub mod cli;
 pub mod config;
 pub mod gui;
+pub mod wine_data;
+pub mod log;
 pub mod steam;
 pub mod util;
 pub mod vdf;

@@ -16,6 +16,10 @@ custom_steam_dir = []
 custom_gui_provider = []
 custom_steam_runtime = []
 
+[lib]
+name = "protontool"
+path = "src/lib.rs"
+
 [[bin]]
 name = "protontool"
 path = "src/main.rs"

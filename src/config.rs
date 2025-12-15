@@ -36,24 +36,38 @@ pub mod defaults {
     pub const GUI_PROVIDERS: &[&str] = &["yad", "zenity"];
 }
 
-pub fn get_config_dir() -> PathBuf {
-    if let Ok(xdg_config) = env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg_config).join("protontool")
-    } else if let Ok(home) = env::var("HOME") {
-        PathBuf::from(home).join(".config/protontool")
+/// Get the base protontool directory (~/.protontool)
+pub fn get_base_dir() -> PathBuf {
+    if let Ok(home) = env::var("HOME") {
+        PathBuf::from(home).join(".protontool")
     } else {
         PathBuf::from("/tmp/protontool")
     }
 }
 
+/// Get the config directory (legacy, now points to base dir)
+pub fn get_config_dir() -> PathBuf {
+    get_base_dir()
+}
+
+/// Get the cache/downloads directory (~/.protontool/tmp)
 pub fn get_cache_dir() -> PathBuf {
-    if let Ok(xdg_cache) = env::var("XDG_CACHE_HOME") {
-        PathBuf::from(xdg_cache).join("protontool")
-    } else if let Ok(home) = env::var("HOME") {
-        PathBuf::from(home).join(".cache/protontool")
-    } else {
-        PathBuf::from("/tmp/protontool-cache")
-    }
+    get_base_dir().join("tmp")
+}
+
+/// Get the custom verbs directory (~/.protontool/verb)
+pub fn get_verbs_dir() -> PathBuf {
+    get_base_dir().join("verb")
+}
+
+/// Get the custom prefixes directory (~/.protontool/pfx)
+pub fn get_prefixes_dir() -> PathBuf {
+    get_base_dir().join("pfx")
+}
+
+/// Get the logs directory (~/.protontool/log)
+pub fn get_log_dir() -> PathBuf {
+    get_base_dir().join("log")
 }
 
 pub fn get_steam_dir() -> Option<PathBuf> {

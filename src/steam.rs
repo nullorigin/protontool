@@ -49,7 +49,6 @@ pub fn find_steam_installations() -> Vec<SteamInstallation> {
     };
 
     let candidates = [
-        home.join(".steam/root"),
         home.join(".steam/steam"),
         home.join(".local/share/Steam"),
         home.join(".var/app/com.valvesoftware.Steam/.steam/steam"),

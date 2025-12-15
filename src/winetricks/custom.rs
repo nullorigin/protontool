@@ -31,7 +31,7 @@ use super::verbs::{Verb, VerbCategory, VerbAction, LocalFile};
 /// ```
 
 pub fn get_custom_verbs_dir() -> PathBuf {
-    crate::config::get_config_dir().join("verbs")
+    crate::config::get_verbs_dir()
 }
 
 pub fn load_custom_verbs() -> Vec<Verb> {

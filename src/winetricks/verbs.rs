@@ -830,6 +830,11 @@ fn register_apps(registry: &mut VerbRegistry) {
             file: DownloadFile::new("https://www.7-zip.org/a/7z2409-x64.exe", "7z2409-x64.exe", None),
             args: vec!["/S".into()],
         }]));
+    registry.register(Verb::new("notepadplusplus", VerbCategory::App, "Notepad++", "Don Ho", "2024")
+        .with_actions(vec![VerbAction::RunInstaller {
+            file: DownloadFile::new("https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.7.1/npp.8.7.1.Installer.x64.exe", "npp.8.7.1.Installer.x64.exe", None),
+            args: vec!["/S".into()],
+        }]));
     registry.register(Verb::new("vlc", VerbCategory::App, "VLC media player", "VideoLAN", "2015")
         .with_actions(vec![VerbAction::RunInstaller {
             file: DownloadFile::new("https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe", "vlc-3.0.21-win64.exe", None),

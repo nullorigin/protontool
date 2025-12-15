@@ -1,0 +1,10 @@
+[package]
+name = "wine-extract"
+version = "0.1.0"
+edition = "2021"
+description = "Development tool to extract debug info from Wine source code and generate Rust tables"
+
+[dependencies]
+regex = "1"
+clap = { version = "4", features = ["derive"] }
+walkdir = "2"

@@ -96,8 +96,7 @@ fn main() {
     let prefix_name: Option<String> = parsed.get_option("prefix").map(|s| s.to_string());
     
     // Get prefixes directory
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home".to_string());
-    let prefixes_dir = PathBuf::from(format!("{}/.local/share/protontool-prefixes", home));
+    let prefixes_dir = protontool::config::get_prefixes_dir();
     
     // Determine launch mode: custom prefix, steam app, or show selection
     let target = if let Some(name) = prefix_name {

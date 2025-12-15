@@ -337,8 +337,7 @@ fn run_gui_create_prefix(no_term: bool) {
 
 fn run_gui_manage_prefix(no_term: bool) {
     // Get the default prefixes directory
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home".to_string());
-    let prefixes_dir = PathBuf::from(format!("{}/.local/share/protontool-prefixes", home));
+    let prefixes_dir = crate::config::get_prefixes_dir();
 
     // Ensure directory exists
     std::fs::create_dir_all(&prefixes_dir).ok();
@@ -441,6 +440,30 @@ fn run_gui_manage_prefix(no_term: bool) {
 
                 println!("Completed running verbs.");
             }
+            Some(PrefixAction::WineTools) => {
+                if let Some(tool) = select_wine_tool_gui() {
+                    println!("Launching: {}", tool);
+                    match wine_ctx.run_wine_no_cwd(&[&tool]) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("Error launching {}: {}", tool, e),
+                    }
+                }
+            }
+            Some(PrefixAction::Settings) => {
+                if let Some(setting) = select_prefix_setting_gui() {
+                    match setting {
+                        PrefixSetting::Dpi => {
+                            if let Some(dpi) = select_dpi_gui() {
+                                println!("Setting DPI to: {}", dpi);
+                                set_wine_dpi(&wine_ctx, dpi);
+                            }
+                        }
+                    }
+                }
+            }
+            Some(PrefixAction::CreateVerb) => {
+                run_verb_creator_gui();
+            }
             None => return,
         }
     }
@@ -449,6 +472,9 @@ fn run_gui_manage_prefix(no_term: bool) {
 enum PrefixAction {
     RunApplication,
     InstallComponents,
+    WineTools,
+    Settings,
+    CreateVerb,
 }
 
 fn select_prefix_action_gui() -> Option<PrefixAction> {
@@ -461,9 +487,12 @@ fn select_prefix_action_gui() -> Option<PrefixAction> {
         "--column", "Description",
         "--print-column", "1",
         "--width", "500",
-        "--height", "300",
+        "--height", "350",
         "run", "Run an application",
         "install", "Install components (DLLs, fonts, etc.)",
+        "tools", "Wine tools (winecfg, regedit, etc.)",
+        "settings", "Prefix settings (DPI, etc.)",
+        "verb", "Create custom verb",
     ];
     
     let output = std::process::Command::new(&gui_tool)
@@ -480,6 +509,9 @@ fn select_prefix_action_gui() -> Option<PrefixAction> {
     match selected.as_str() {
         "run" => Some(PrefixAction::RunApplication),
         "install" => Some(PrefixAction::InstallComponents),
+        "tools" => Some(PrefixAction::WineTools),
+        "settings" => Some(PrefixAction::Settings),
+        "verb" => Some(PrefixAction::CreateVerb),
         _ => None,
     }
 }
@@ -536,6 +568,624 @@ fn select_arch_gui() -> Option<crate::winetricks::WineArch> {
     
     let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
     crate::winetricks::WineArch::from_str(&selected)
+}
+
+fn select_wine_tool_gui() -> Option<String> {
+    let gui_tool = crate::gui::get_gui_tool()?;
+    
+    let args = vec![
+        "--list",
+        "--title", "Select Wine tool",
+        "--column", "Tool",
+        "--column", "Description",
+        "--print-column", "1",
+        "--width", "500",
+        "--height", "350",
+        "winecfg", "Wine configuration",
+        "regedit", "Registry editor",
+        "taskmgr", "Task manager",
+        "explorer", "File explorer",
+        "control", "Control panel",
+        "cmd", "Command prompt",
+        "uninstaller", "Wine uninstaller",
+    ];
+    
+    let output = std::process::Command::new(&gui_tool)
+        .args(&args)
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if selected.is_empty() {
+        None
+    } else {
+        Some(selected)
+    }
+}
+
+enum PrefixSetting {
+    Dpi,
+}
+
+fn select_prefix_setting_gui() -> Option<PrefixSetting> {
+    let gui_tool = crate::gui::get_gui_tool()?;
+    
+    let args = vec![
+        "--list",
+        "--title", "Select setting",
+        "--column", "Setting",
+        "--column", "Description",
+        "--print-column", "1",
+        "--width", "500",
+        "--height", "250",
+        "dpi", "Display DPI (scaling)",
+    ];
+    
+    let output = std::process::Command::new(&gui_tool)
+        .args(&args)
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    match selected.as_str() {
+        "dpi" => Some(PrefixSetting::Dpi),
+        _ => None,
+    }
+}
+
+fn select_dpi_gui() -> Option<u32> {
+    let gui_tool = crate::gui::get_gui_tool()?;
+    
+    // DPI options in increments of 48, starting at 96
+    let args = vec![
+        "--list",
+        "--title", "Select DPI",
+        "--column", "DPI",
+        "--column", "Scale",
+        "--print-column", "1",
+        "--width", "400",
+        "--height", "400",
+        "96", "100% (default)",
+        "144", "150%",
+        "192", "200%",
+        "240", "250%",
+        "288", "300%",
+        "336", "350%",
+        "384", "400%",
+    ];
+    
+    let output = std::process::Command::new(&gui_tool)
+        .args(&args)
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    selected.parse().ok()
+}
+
+fn set_wine_dpi(wine_ctx: &crate::winetricks::WineContext, dpi: u32) {
+    // Set DPI via registry
+    let reg_content = format!(
+        "Windows Registry Editor Version 5.00\n\n\
+         [HKEY_CURRENT_USER\\Control Panel\\Desktop]\n\
+         \"LogPixels\"=dword:{:08x}\n\n\
+         [HKEY_CURRENT_USER\\Software\\Wine\\Fonts]\n\
+         \"LogPixels\"=dword:{:08x}\n",
+        dpi, dpi
+    );
+    
+    // Write to a temp .reg file
+    let tmp_dir = std::env::temp_dir();
+    let reg_file = tmp_dir.join("protontool_dpi.reg");
+    
+    if let Err(e) = std::fs::write(&reg_file, &reg_content) {
+        eprintln!("Failed to write registry file: {}", e);
+        return;
+    }
+    
+    // Import the registry file
+    match wine_ctx.run_wine_no_cwd(&["regedit", "/S", &reg_file.to_string_lossy()]) {
+        Ok(_) => println!("DPI set to {}. You may need to restart applications for changes to take effect.", dpi),
+        Err(e) => eprintln!("Failed to set DPI: {}", e),
+    }
+    
+    // Clean up
+    std::fs::remove_file(&reg_file).ok();
+}
+
+// ============================================================================
+// CUSTOM VERB CREATOR GUI
+// ============================================================================
+
+struct VerbData {
+    name: String,
+    title: String,
+    publisher: String,
+    year: String,
+    category: String,
+    action_type: String,
+    installer_path: String,
+    installer_args: String,
+}
+
+impl Default for VerbData {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            title: String::new(),
+            publisher: String::new(),
+            year: chrono_lite_now().split('-').next().unwrap_or("2024").to_string(),
+            category: "app".to_string(),
+            action_type: "local_installer".to_string(),
+            installer_path: String::new(),
+            installer_args: "/S".to_string(),
+        }
+    }
+}
+
+impl VerbData {
+    fn derive_name_from_title(&mut self) {
+        self.name = self.title
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == ' ')
+            .collect::<String>()
+            .replace(' ', "");
+    }
+    
+    fn to_toml(&self) -> String {
+        let args_array = self.installer_args
+            .split_whitespace()
+            .map(|s| format!("\"{}\"", s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        
+        format!(
+            r#"[verb]
+name = "{}"
+category = "{}"
+title = "{}"
+publisher = "{}"
+year = "{}"
+
+[[actions]]
+type = "{}"
+path = "{}"
+args = [{}]
+"#,
+            self.name,
+            self.category,
+            self.title,
+            self.publisher,
+            self.year,
+            self.action_type,
+            self.installer_path,
+            args_array
+        )
+    }
+    
+    fn from_toml(content: &str) -> Option<Self> {
+        let mut data = Self::default();
+        
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+                continue;
+            }
+            
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim();
+                let value = value.trim().trim_matches('"');
+                
+                match key {
+                    "name" => data.name = value.to_string(),
+                    "title" => data.title = value.to_string(),
+                    "publisher" => data.publisher = value.to_string(),
+                    "year" => data.year = value.to_string(),
+                    "category" => data.category = value.to_string(),
+                    "type" => data.action_type = value.to_string(),
+                    "path" => data.installer_path = value.to_string(),
+                    "args" => {
+                        // Parse array like ["/S", "/D=path"]
+                        let inner = value.trim_start_matches('[').trim_end_matches(']');
+                        data.installer_args = inner
+                            .split(',')
+                            .map(|s| s.trim().trim_matches('"'))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        if data.name.is_empty() && data.title.is_empty() {
+            None
+        } else {
+            Some(data)
+        }
+    }
+}
+
+fn run_verb_creator_gui() {
+    let gui_tool = match crate::gui::get_gui_tool() {
+        Some(tool) => tool,
+        None => {
+            eprintln!("No GUI tool available");
+            return;
+        }
+    };
+    
+    // Initial dialog: Import existing or create new?
+    let output = std::process::Command::new(&gui_tool)
+        .args([
+            "--list",
+            "--title", "Custom Verb Creator",
+            "--column", "Option",
+            "--column", "Description",
+            "--print-column", "1",
+            "--width", "500",
+            "--height", "250",
+            "new", "Create a new custom verb",
+            "import", "Import existing TOML file",
+        ])
+        .output();
+    
+    let mut verb_data = VerbData::default();
+    
+    if let Ok(out) = output {
+        if out.status.success() {
+            let choice = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if choice == "import" {
+                if let Some(data) = import_verb_toml_gui(&gui_tool) {
+                    verb_data = data;
+                } else {
+                    return;
+                }
+            }
+        } else {
+            return;
+        }
+    } else {
+        return;
+    }
+    
+    // Show advanced options checkbox
+    let show_advanced = std::process::Command::new(&gui_tool)
+        .args([
+            "--question",
+            "--title", "Verb Creator Mode",
+            "--text", "Show advanced options?\n\nSimple mode derives some values automatically.\nAdvanced mode gives full control over all fields.",
+            "--ok-label", "Advanced",
+            "--cancel-label", "Simple",
+            "--width", "400",
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    
+    // Run the appropriate editor
+    let result = if show_advanced {
+        edit_verb_advanced_gui(&gui_tool, &mut verb_data)
+    } else {
+        edit_verb_simple_gui(&gui_tool, &mut verb_data)
+    };
+    
+    if !result {
+        return;
+    }
+    
+    // Save dialog
+    save_verb_gui(&gui_tool, &verb_data);
+}
+
+fn import_verb_toml_gui(gui_tool: &std::path::Path) -> Option<VerbData> {
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--file-selection",
+            "--title", "Import TOML verb file",
+            "--file-filter", "TOML files | *.toml",
+        ])
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        return None;
+    }
+    
+    let content = std::fs::read_to_string(&path).ok()?;
+    VerbData::from_toml(&content)
+}
+
+fn edit_verb_simple_gui(gui_tool: &std::path::Path, data: &mut VerbData) -> bool {
+    // Simple mode: just ask for title, publisher, and installer path
+    // Name is derived from title, year is current year, category defaults to app
+    
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--forms",
+            "--title", "Create Custom Verb (Simple)",
+            "--text", "Enter verb details:\n(Name will be derived from title)",
+            "--add-entry", "Title",
+            "--add-entry", "Publisher",
+            "--add-entry", "Installer Arguments",
+            "--width", "500",
+        ])
+        .output();
+    
+    if let Ok(out) = output {
+        if !out.status.success() {
+            return false;
+        }
+        
+        let output_str = String::from_utf8_lossy(&out.stdout).to_string();
+        let values: Vec<String> = output_str.trim().split('|').map(|s| s.to_string()).collect();
+        
+        if values.len() >= 3 {
+            data.title = values[0].clone();
+            data.publisher = values[1].clone();
+            data.installer_args = values[2].clone();
+            data.derive_name_from_title();
+        }
+    } else {
+        return false;
+    }
+    
+    // Select installer file
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--file-selection",
+            "--title", "Select installer executable",
+            "--file-filter", "Executables | *.exe *.msi",
+        ])
+        .output();
+    
+    if let Ok(out) = output {
+        if out.status.success() {
+            data.installer_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    
+    !data.title.is_empty() && !data.installer_path.is_empty()
+}
+
+fn edit_verb_advanced_gui(gui_tool: &std::path::Path, data: &mut VerbData) -> bool {
+    // Advanced mode: full control over all fields
+    
+    // First, select category
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--list",
+            "--title", "Select Category",
+            "--column", "Category",
+            "--column", "Description",
+            "--print-column", "1",
+            "--width", "400",
+            "--height", "300",
+            "app", "Application",
+            "dll", "DLL/Runtime",
+            "font", "Font",
+            "setting", "Setting/Configuration",
+            "custom", "Custom/Other",
+        ])
+        .output();
+    
+    if let Ok(out) = output {
+        if out.status.success() {
+            data.category = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    
+    // Select action type
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--list",
+            "--title", "Select Action Type",
+            "--column", "Type",
+            "--column", "Description",
+            "--print-column", "1",
+            "--width", "500",
+            "--height", "300",
+            "local_installer", "Run a local installer file",
+            "script", "Run a shell script",
+            "override", "Set DLL override",
+            "registry", "Import registry settings",
+        ])
+        .output();
+    
+    if let Ok(out) = output {
+        if out.status.success() {
+            data.action_type = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    
+    // Form for all text fields
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--forms",
+            "--title", "Create Custom Verb (Advanced)",
+            "--text", "Enter verb details:",
+            "--add-entry", &format!("Name [{}]", data.name),
+            "--add-entry", &format!("Title [{}]", data.title),
+            "--add-entry", &format!("Publisher [{}]", data.publisher),
+            "--add-entry", &format!("Year [{}]", data.year),
+            "--add-entry", &format!("Arguments [{}]", data.installer_args),
+            "--width", "500",
+        ])
+        .output();
+    
+    if let Ok(out) = output {
+        if !out.status.success() {
+            return false;
+        }
+        
+        let output_str = String::from_utf8_lossy(&out.stdout).to_string();
+        let values: Vec<String> = output_str.trim().split('|').map(|s| s.to_string()).collect();
+        
+        if values.len() >= 5 {
+            if !values[0].is_empty() { data.name = values[0].clone(); }
+            if !values[1].is_empty() { data.title = values[1].clone(); }
+            if !values[2].is_empty() { data.publisher = values[2].clone(); }
+            if !values[3].is_empty() { data.year = values[3].clone(); }
+            if !values[4].is_empty() { data.installer_args = values[4].clone(); }
+        }
+    } else {
+        return false;
+    }
+    
+    // Select file based on action type
+    let file_title = match data.action_type.as_str() {
+        "local_installer" => "Select installer executable",
+        "script" => "Select shell script",
+        _ => "Select file",
+    };
+    
+    let file_filter = match data.action_type.as_str() {
+        "local_installer" => "Executables | *.exe *.msi",
+        "script" => "Shell scripts | *.sh",
+        _ => "All files | *",
+    };
+    
+    if data.action_type == "local_installer" || data.action_type == "script" {
+        let output = std::process::Command::new(gui_tool)
+            .args([
+                "--file-selection",
+                "--title", file_title,
+                "--file-filter", file_filter,
+            ])
+            .output();
+        
+        if let Ok(out) = output {
+            if out.status.success() {
+                data.installer_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    
+    !data.name.is_empty() && !data.title.is_empty()
+}
+
+fn save_verb_gui(gui_tool: &std::path::Path, data: &VerbData) {
+    let toml_content = data.to_toml();
+    let default_dir = crate::winetricks::custom::get_custom_verbs_dir();
+    
+    // Ensure the directory exists
+    std::fs::create_dir_all(&default_dir).ok();
+    
+    // Ask Save or Save As
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--list",
+            "--title", "Save Verb",
+            "--column", "Option",
+            "--column", "Description",
+            "--print-column", "1",
+            "--width", "500",
+            "--height", "200",
+            "save", &format!("Save to default location (~/.config/protontool/verbs/{}.toml)", data.name),
+            "saveas", "Save As... (choose location)",
+        ])
+        .output();
+    
+    let save_path = if let Ok(out) = output {
+        if !out.status.success() {
+            return;
+        }
+        
+        let choice = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        
+        if choice == "saveas" {
+            // Let user choose location
+            let output = std::process::Command::new(gui_tool)
+                .args([
+                    "--file-selection",
+                    "--save",
+                    "--title", "Save verb as...",
+                    "--filename", &format!("{}.toml", data.name),
+                    "--file-filter", "TOML files | *.toml",
+                ])
+                .output();
+            
+            if let Ok(out) = output {
+                if out.status.success() {
+                    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !path.is_empty() {
+                        PathBuf::from(path)
+                    } else {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            } else {
+                return;
+            }
+        } else {
+            // Save to default location
+            default_dir.join(format!("{}.toml", data.name))
+        }
+    } else {
+        return;
+    };
+    
+    // Write the file
+    match std::fs::write(&save_path, &toml_content) {
+        Ok(_) => {
+            println!("Verb saved to: {}", save_path.display());
+            let _ = std::process::Command::new(gui_tool)
+                .args([
+                    "--info",
+                    "--title", "Verb Saved",
+                    "--text", &format!("Custom verb '{}' saved successfully!\n\nLocation: {}\n\nRestart protontool to use the new verb.", data.name, save_path.display()),
+                    "--width", "500",
+                ])
+                .status();
+        }
+        Err(e) => {
+            eprintln!("Failed to save verb: {}", e);
+            let _ = std::process::Command::new(gui_tool)
+                .args([
+                    "--error",
+                    "--title", "Save Failed",
+                    "--text", &format!("Failed to save verb: {}", e),
+                    "--width", "400",
+                ])
+                .status();
+        }
+    }
 }
 
 fn run_list_mode(parsed: &util::ParsedArgs, no_term: bool) {

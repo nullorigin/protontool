@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::steam::ProtonApp;
+use crate::log as ptlog;
 
 /// Wine prefix architecture
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,7 +168,22 @@ impl WineContext {
         }
         
         self.apply_env(&mut cmd);
-        cmd.output()
+        let output = cmd.output()?;
+        
+        // Log the output with error scanning
+        let executable = args.first().unwrap_or(&"wine");
+        self.log_output(executable, &output);
+        
+        Ok(output)
+    }
+    
+    /// Log output from a wine command and scan for known errors
+    pub fn log_output(&self, executable: &str, output: &Output) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let exit_code = output.status.code().unwrap_or(-1);
+        
+        ptlog::log_executable_output(executable, &stdout, &stderr, exit_code);
     }
 
     pub fn run_wine64(&self, args: &[&str]) -> std::io::Result<Output> {
