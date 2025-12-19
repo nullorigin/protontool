@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 
 use crate::config;
 use crate::steam::{ProtonApp, SteamApp, SteamInstallation};
-use crate::util::which;
+use crate::util::{which, output_to_string};
 use crate::wine::{Verb, VerbCategory};
 
 pub fn get_gui_tool() -> Option<std::path::PathBuf> {
@@ -103,7 +103,7 @@ pub fn select_steam_library_paths() -> Vec<PathBuf> {
 
                 if let Ok(out) = dir_output {
                     if out.status.success() {
-                        let path_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        let path_str = output_to_string(&out);
                         if !path_str.is_empty() {
                             let path = PathBuf::from(&path_str);
                             
@@ -174,7 +174,7 @@ pub fn select_steam_installation(installations: &[SteamInstallation]) -> Option<
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     
     installations.iter()
         .find(|inst| inst.steam_path.to_string_lossy() == selected)
@@ -222,10 +222,7 @@ pub fn select_steam_app_with_gui(
         return None;
     }
     
-    let selected_id: u32 = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .ok()?;
+    let selected_id: u32 = output_to_string(&output).parse().ok()?;
     
     steam_apps.iter()
         .find(|app| app.appid == selected_id)
@@ -280,8 +277,7 @@ pub fn select_verbs_with_gui(verbs: &[&Verb], title: Option<&str>) -> Vec<String
         return vec![];
     }
     
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
+    output_to_string(&output)
         .split_whitespace()
         .map(|s| s.to_string())
         .collect()
@@ -312,7 +308,7 @@ pub fn select_verb_category_gui() -> Option<VerbCategory> {
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     
     match selected.as_str() {
         "dlls" => Some(VerbCategory::Dll),
@@ -372,7 +368,7 @@ pub fn select_proton_with_gui(proton_apps: &[ProtonApp]) -> Option<ProtonApp> {
         return None;
     }
     
-    let selected_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected_name = output_to_string(&output);
     
     proton_apps.iter()
         .find(|app| app.name == selected_name)
@@ -398,7 +394,7 @@ pub fn get_prefix_name_gui() -> Option<String> {
         return None;
     }
     
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let name = output_to_string(&output);
     if name.is_empty() {
         None
     } else {
@@ -448,7 +444,7 @@ pub fn select_prefix_location_gui(default_name: &str) -> Option<PathBuf> {
                 return None;
             }
             
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let path = output_to_string(&output);
             if path.is_empty() {
                 None
             } else {
@@ -493,7 +489,7 @@ pub fn show_main_menu_gui() -> Option<GuiAction> {
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     
     match selected.as_str() {
         "game" => Some(GuiAction::ManageGame),
@@ -559,10 +555,10 @@ pub fn select_custom_prefix_gui(prefixes_dir: &Path) -> Option<PathBuf> {
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     if selected.is_empty() {
         None
     } else {
-        Some(PathBuf::from(selected))
+        Some(prefixes_dir.join(&selected))
     }
 }

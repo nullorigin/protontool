@@ -32,6 +32,10 @@ path = "src/bin/launch.rs"
 name = "protontool-desktop-install"
 path = "src/bin/desktop_install.rs"
 
+[[bin]]
+name = "wine-extract"
+path = "src/bin/wine_extract.rs"
+
 [profile.release]
 lto = true
 opt-level = "z"

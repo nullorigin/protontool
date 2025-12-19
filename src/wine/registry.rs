@@ -1,6 +1,111 @@
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 use super::WineContext;
+
+/// Registry keys that should have paths filtered out during prefix init
+pub const FILTER_REGISTRY_KEYS: &[&str] = &[
+    r"Software\Microsoft\Windows\CurrentVersion\Fonts",
+    r"Software\Microsoft\Windows NT\CurrentVersion\Fonts",
+    r"Software\Wine\Fonts\External Fonts",
+];
+
+/// Parse a registry key line like "[Software\Key] 12345"
+/// Returns the key path if this is a valid key line
+pub fn parse_registry_key_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('[') {
+        return None;
+    }
+    
+    // Find the closing bracket followed by space and digits
+    if let Some(bracket_pos) = trimmed.find("] ") {
+        let after_bracket = &trimmed[bracket_pos + 2..];
+        // Check if remaining is all digits (timestamp)
+        if after_bracket.chars().all(|c| c.is_ascii_digit()) {
+            return Some(&trimmed[1..bracket_pos]);
+        }
+    }
+    None
+}
+
+/// Parse a registry value line like "\"name\"=\"value\""
+/// Returns (name, value) if this is a valid value line
+pub fn parse_registry_value_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('"') {
+        return None;
+    }
+    
+    // Find the closing quote of the name
+    let rest = &trimmed[1..];
+    let name_end = rest.find('"')?;
+    let name = &rest[..name_end];
+    
+    // Skip to the = sign
+    let after_name = &rest[name_end + 1..];
+    let eq_pos = after_name.find('=')?;
+    let after_eq = after_name[eq_pos + 1..].trim();
+    
+    // Check if value starts with quote
+    if after_eq.starts_with('"') && after_eq.len() > 1 {
+        // Find closing quote
+        let value_start = &after_eq[1..];
+        if let Some(value_end) = value_start.rfind('"') {
+            let value = &value_start[..value_end];
+            return Some((name, value));
+        }
+    }
+    
+    None
+}
+
+/// Filter registry file to remove fully qualified paths from font-related keys
+/// 
+/// These paths are specific to the build machine and can cause issues.
+pub fn filter_registry_file(filename: &Path, filter_keys: &[&str]) -> std::io::Result<()> {
+    let file = File::open(filename)?;
+    let reader = BufReader::new(file);
+    
+    let tmp_path = filename.with_extension("reg.tmp");
+    let mut output = File::create(&tmp_path)?;
+    
+    let mut filtering = false;
+    
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        
+        // Check for registry key header
+        if let Some(key) = parse_registry_key_line(trimmed) {
+            writeln!(output, "{}", line)?;
+            filtering = filter_keys.iter().any(|k| key.contains(k));
+            continue;
+        }
+        
+        // Check for registry value
+        if let Some((_, value)) = parse_registry_value_line(trimmed) {
+            if filtering {
+                // Check if value looks like an absolute path (starts with drive letter)
+                if value.len() > 2 && value.chars().nth(1) == Some(':') {
+                    // Skip this line - it contains an absolute path
+                    continue;
+                }
+            }
+            writeln!(output, "{}", line)?;
+            continue;
+        }
+        
+        // Write all other lines unchanged
+        writeln!(output, "{}", line)?;
+    }
+    
+    // Replace original with filtered version
+    fs::rename(&tmp_path, filename)?;
+    
+    Ok(())
+}
 
 pub struct RegistryEditor<'a> {
     wine_ctx: &'a WineContext,

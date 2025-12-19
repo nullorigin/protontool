@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process;
 
 use crate::cli::util::{ArgParser, enable_logging, exit_with_error};
+use crate::util::output_to_string;
 use crate::gui::{prompt_filesystem_access, select_steam_app_with_gui, select_steam_installation, select_steam_library_paths, select_verb_category_gui, select_verbs_with_gui, show_main_menu_gui, GuiAction, select_proton_with_gui, get_prefix_name_gui, select_prefix_location_gui, select_custom_prefix_gui};
 use crate::steam::{find_proton_app, find_proton_by_name, find_steam_installations, get_proton_apps, get_steam_apps, get_steam_lib_paths};
 use crate::wine::Wine;
@@ -41,10 +42,7 @@ pub fn main_cli(args: Option<Vec<String>>) {
     parser.add_flag("list", &["-l", "--list"], "List all apps");
     parser.add_option("command", &["-c", "--command"], "Run a command with Wine environment variables");
     parser.add_flag("gui", &["--gui"], "Launch the protontool GUI");
-    parser.add_flag("no_runtime", &["--no-runtime"], "Disable Steam Runtime");
-    parser.add_flag("no_bwrap", &["--no-bwrap"], "Disable bwrap containerization");
-    parser.add_flag("background_wineserver", &["--background-wineserver"], "Launch background wineserver");
-    parser.add_flag("no_background_wineserver", &["--no-background-wineserver"], "No background wineserver");
+    parser.add_flag("background_wineserver", &["--background-wineserver"], "Start wineserver in background before running commands");
     parser.add_flag("cwd_app", &["--cwd-app"], "Set working directory to app's install dir");
     parser.add_multi_option("steam_library", &["--steam-library", "-S"], "Additional Steam library path (can be specified multiple times)");
     parser.add_option("create_prefix", &["--create-prefix"], "Create a new Wine prefix at the given path");
@@ -316,17 +314,16 @@ fn run_gui_create_prefix(no_term: bool) {
     }
 
     let wine_ctx = crate::wine::WineContext::from_proton_with_arch(&proton_app, &prefix_path, arch);
+    // Proton uses "files" subdirectory, older versions may use "dist"
+    let dist_dir = {
+        let files_dir = proton_app.install_path.join("files");
+        let dist_dir = proton_app.install_path.join("dist");
+        if files_dir.exists() { files_dir } else { dist_dir }
+    };
     
-    println!("Initializing prefix with wineboot...");
-    match wine_ctx.run_wine_no_cwd(&["wineboot", "--init"]) {
-        Ok(output) => {
-            if !output.status.success() {
-                eprintln!("Warning: wineboot returned non-zero exit code");
-            }
-        }
-        Err(e) => {
-            exit_with_error(&format!("Failed to initialize prefix: {}", e), no_term);
-        }
+    println!("Initializing prefix...");
+    if let Err(e) = crate::wine::prefix::init_prefix(&prefix_path, &dist_dir, true, Some(&wine_ctx)) {
+        exit_with_error(&format!("Failed to initialize prefix: {}", e), no_term);
     }
 
     // Save metadata
@@ -543,6 +540,30 @@ fn run_gui_manage_prefix(no_term: bool) {
                                 set_wine_dpi(&wine_ctx, dpi);
                             }
                         }
+                        PrefixSetting::DllOverride => {
+                            run_dll_override_gui(&wine_ctx);
+                        }
+                        PrefixSetting::WindowsVersion => {
+                            if let Some(version) = select_windows_version_gui() {
+                                println!("Setting Windows version to: {}", version);
+                                set_windows_version(&wine_ctx, &version);
+                            }
+                        }
+                        PrefixSetting::VirtualDesktop => {
+                            run_virtual_desktop_gui(&wine_ctx);
+                        }
+                        PrefixSetting::Theme => {
+                            if let Some(theme) = select_theme_gui(&wine_ctx) {
+                                println!("Setting theme to: {}", theme);
+                                set_wine_theme(&wine_ctx, &theme);
+                            }
+                        }
+                        PrefixSetting::RegistryImport => {
+                            run_registry_import_gui(&wine_ctx);
+                        }
+                        PrefixSetting::ViewLogs => {
+                            run_log_viewer_gui();
+                        }
                     }
                 }
             }
@@ -589,7 +610,7 @@ fn select_prefix_action_gui() -> Option<PrefixAction> {
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     
     match selected.as_str() {
         "run" => Some(PrefixAction::RunApplication),
@@ -619,7 +640,7 @@ fn select_executable_gui() -> Option<PathBuf> {
         return None;
     }
     
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let path = output_to_string(&output);
     if path.is_empty() {
         None
     } else {
@@ -651,7 +672,7 @@ fn select_arch_gui() -> Option<crate::wine::WineArch> {
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     crate::wine::WineArch::from_str(&selected)
 }
 
@@ -684,7 +705,7 @@ fn select_wine_tool_gui() -> Option<String> {
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     if selected.is_empty() {
         None
     } else {
@@ -694,6 +715,12 @@ fn select_wine_tool_gui() -> Option<String> {
 
 enum PrefixSetting {
     Dpi,
+    DllOverride,
+    WindowsVersion,
+    VirtualDesktop,
+    Theme,
+    RegistryImport,
+    ViewLogs,
 }
 
 fn select_prefix_setting_gui() -> Option<PrefixSetting> {
@@ -706,8 +733,14 @@ fn select_prefix_setting_gui() -> Option<PrefixSetting> {
         "--column", "Description",
         "--print-column", "1",
         "--width", "500",
-        "--height", "250",
+        "--height", "300",
         "dpi", "Display DPI (scaling)",
+        "dll", "DLL overrides (native/builtin)",
+        "winver", "Windows version",
+        "desktop", "Virtual desktop",
+        "theme", "Desktop theme",
+        "registry", "Import registry file (.reg)",
+        "logs", "View application logs",
     ];
     
     let output = std::process::Command::new(&gui_tool)
@@ -719,9 +752,15 @@ fn select_prefix_setting_gui() -> Option<PrefixSetting> {
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     match selected.as_str() {
         "dpi" => Some(PrefixSetting::Dpi),
+        "dll" => Some(PrefixSetting::DllOverride),
+        "winver" => Some(PrefixSetting::WindowsVersion),
+        "desktop" => Some(PrefixSetting::VirtualDesktop),
+        "theme" => Some(PrefixSetting::Theme),
+        "registry" => Some(PrefixSetting::RegistryImport),
+        "logs" => Some(PrefixSetting::ViewLogs),
         _ => None,
     }
 }
@@ -756,7 +795,7 @@ fn select_dpi_gui() -> Option<u32> {
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     selected.parse().ok()
 }
 
@@ -788,6 +827,917 @@ fn set_wine_dpi(wine_ctx: &crate::wine::WineContext, dpi: u32) {
     
     // Clean up
     std::fs::remove_file(&reg_file).ok();
+}
+
+// ============================================================================
+// DLL OVERRIDE SETTINGS
+// ============================================================================
+
+fn run_dll_override_gui(wine_ctx: &crate::wine::WineContext) {
+    let gui_tool = match crate::gui::get_gui_tool() {
+        Some(tool) => tool,
+        None => return,
+    };
+    
+    loop {
+        // Show action menu
+        let args = vec![
+            "--list",
+            "--title", "DLL Overrides",
+            "--column", "Action",
+            "--column", "Description",
+            "--print-column", "1",
+            "--width", "500",
+            "--height", "300",
+            "add", "Add new DLL override",
+            "remove", "Remove DLL override",
+            "list", "List current overrides",
+            "back", "Back to settings",
+        ];
+        
+        let output = match std::process::Command::new(&gui_tool).args(&args).output() {
+            Ok(out) => out,
+            Err(_) => return,
+        };
+        
+        if !output.status.success() {
+            return;
+        }
+        
+        let selected = output_to_string(&output);
+        match selected.as_str() {
+            "add" => add_dll_override_gui(&gui_tool, wine_ctx),
+            "remove" => remove_dll_override_gui(&gui_tool, wine_ctx),
+            "list" => list_dll_overrides_gui(&gui_tool, wine_ctx),
+            _ => return,
+        }
+    }
+}
+
+fn add_dll_override_gui(gui_tool: &std::path::Path, wine_ctx: &crate::wine::WineContext) {
+    // Get DLL name
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--entry",
+            "--title", "Add DLL Override",
+            "--text", "Enter DLL name (without .dll extension):\n\nCommon examples: d3d9, d3d11, dxgi, xinput1_3, vcrun2019",
+            "--width", "400",
+        ])
+        .output();
+    
+    let dll_name = match output {
+        Ok(out) if out.status.success() => output_to_string(&out),
+        _ => return,
+    };
+    
+    if dll_name.is_empty() {
+        return;
+    }
+    
+    // Get override mode
+    let title = format!("Override mode for {}", dll_name);
+    let args = vec![
+        "--list",
+        "--title", &title,
+        "--column", "Mode",
+        "--column", "Description",
+        "--print-column", "1",
+        "--width", "500",
+        "--height", "300",
+        "native", "Use Windows native DLL only",
+        "builtin", "Use Wine builtin DLL only",
+        "native,builtin", "Prefer native, fall back to builtin",
+        "builtin,native", "Prefer builtin, fall back to native",
+        "disabled", "Disable the DLL entirely",
+    ];
+    
+    let output = match std::process::Command::new(gui_tool).args(&args).output() {
+        Ok(out) => out,
+        Err(_) => return,
+    };
+    
+    if !output.status.success() {
+        return;
+    }
+    
+    let mode = output_to_string(&output);
+    if mode.is_empty() {
+        return;
+    }
+    
+    // Set the override via registry
+    let reg_content = format!(
+        "Windows Registry Editor Version 5.00\n\n\
+         [HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]\n\
+         \"{}\"=\"{}\"\n",
+        dll_name, mode
+    );
+    
+    let tmp_dir = std::env::temp_dir();
+    let reg_file = tmp_dir.join("protontool_dll_override.reg");
+    
+    if let Err(e) = std::fs::write(&reg_file, &reg_content) {
+        eprintln!("Failed to write registry file: {}", e);
+        return;
+    }
+    
+    match wine_ctx.run_wine_no_cwd(&["regedit", "/S", &reg_file.to_string_lossy()]) {
+        Ok(_) => println!("DLL override set: {} = {}", dll_name, mode),
+        Err(e) => eprintln!("Failed to set DLL override: {}", e),
+    }
+    
+    std::fs::remove_file(&reg_file).ok();
+}
+
+fn remove_dll_override_gui(gui_tool: &std::path::Path, wine_ctx: &crate::wine::WineContext) {
+    // Get DLL name to remove
+    let output = std::process::Command::new(gui_tool)
+        .args([
+            "--entry",
+            "--title", "Remove DLL Override",
+            "--text", "Enter DLL name to remove override for:",
+            "--width", "400",
+        ])
+        .output();
+    
+    let dll_name = match output {
+        Ok(out) if out.status.success() => output_to_string(&out),
+        _ => return,
+    };
+    
+    if dll_name.is_empty() {
+        return;
+    }
+    
+    // Remove override via registry (set to -)
+    let reg_content = format!(
+        "Windows Registry Editor Version 5.00\n\n\
+         [HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]\n\
+         \"{}\"=-\n",
+        dll_name
+    );
+    
+    let tmp_dir = std::env::temp_dir();
+    let reg_file = tmp_dir.join("protontool_dll_override.reg");
+    
+    if let Err(e) = std::fs::write(&reg_file, &reg_content) {
+        eprintln!("Failed to write registry file: {}", e);
+        return;
+    }
+    
+    match wine_ctx.run_wine_no_cwd(&["regedit", "/S", &reg_file.to_string_lossy()]) {
+        Ok(_) => println!("DLL override removed: {}", dll_name),
+        Err(e) => eprintln!("Failed to remove DLL override: {}", e),
+    }
+    
+    std::fs::remove_file(&reg_file).ok();
+}
+
+fn list_dll_overrides_gui(gui_tool: &std::path::Path, wine_ctx: &crate::wine::WineContext) {
+    // Export the DLL overrides from registry
+    let output = wine_ctx.run_wine_no_cwd(&[
+        "reg", "query", "HKCU\\Software\\Wine\\DllOverrides"
+    ]);
+    
+    let text = match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if stdout.trim().is_empty() || stdout.contains("ERROR") {
+                "No DLL overrides configured.".to_string()
+            } else {
+                // Parse and format the output
+                let mut overrides = Vec::new();
+                for line in stdout.lines() {
+                    let line = line.trim();
+                    if line.contains("REG_SZ") {
+                        // Format: "    dllname    REG_SZ    mode"
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() >= 3 {
+                            overrides.push(format!("{} = {}", parts[0], parts[2]));
+                        }
+                    }
+                }
+                if overrides.is_empty() {
+                    "No DLL overrides configured.".to_string()
+                } else {
+                    overrides.join("\n")
+                }
+            }
+        }
+        Err(_) => "No DLL overrides configured.".to_string(),
+    };
+    
+    let _ = std::process::Command::new(gui_tool)
+        .args([
+            "--info",
+            "--title", "Current DLL Overrides",
+            "--text", &text,
+            "--width", "400",
+        ])
+        .output();
+}
+
+// ============================================================================
+// WINDOWS VERSION SETTINGS
+// ============================================================================
+
+fn select_windows_version_gui() -> Option<String> {
+    let gui_tool = crate::gui::get_gui_tool()?;
+    
+    let args = vec![
+        "--list",
+        "--title", "Select Windows Version",
+        "--column", "Version",
+        "--column", "Description",
+        "--print-column", "1",
+        "--width", "500",
+        "--height", "400",
+        "win11", "Windows 11",
+        "win10", "Windows 10",
+        "win81", "Windows 8.1",
+        "win8", "Windows 8",
+        "win7", "Windows 7",
+        "vista", "Windows Vista",
+        "winxp64", "Windows XP (64-bit)",
+        "winxp", "Windows XP",
+        "win2k", "Windows 2000",
+        "win98", "Windows 98",
+    ];
+    
+    let output = std::process::Command::new(&gui_tool)
+        .args(&args)
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let selected = output_to_string(&output);
+    if selected.is_empty() { None } else { Some(selected) }
+}
+
+fn set_windows_version(wine_ctx: &crate::wine::WineContext, version: &str) {
+    // Map version string to Windows version data
+    let (ver_str, build, sp, product) = match version {
+        "win11" => ("win11", "10.0.22000", "", "Windows 11"),
+        "win10" => ("win10", "10.0.19041", "", "Windows 10"),
+        "win81" => ("win81", "6.3.9600", "", "Windows 8.1"),
+        "win8" => ("win8", "6.2.9200", "", "Windows 8"),
+        "win7" => ("win7", "6.1.7601", "Service Pack 1", "Windows 7"),
+        "vista" => ("vista", "6.0.6002", "Service Pack 2", "Windows Vista"),
+        "winxp64" => ("winxp64", "5.2.3790", "Service Pack 2", "Windows XP"),
+        "winxp" => ("winxp", "5.1.2600", "Service Pack 3", "Windows XP"),
+        "win2k" => ("win2k", "5.0.2195", "Service Pack 4", "Windows 2000"),
+        "win98" => ("win98", "4.10.2222", "", "Windows 98"),
+        _ => return,
+    };
+    
+    let parts: Vec<&str> = build.split('.').collect();
+    let major = parts.get(0).unwrap_or(&"10");
+    let minor = parts.get(1).unwrap_or(&"0");
+    let build_num = parts.get(2).unwrap_or(&"0");
+    
+    let reg_content = format!(
+        "Windows Registry Editor Version 5.00\n\n\
+         [HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows NT\\CurrentVersion]\n\
+         \"ProductName\"=\"{}\"\n\
+         \"CSDVersion\"=\"{}\"\n\
+         \"CurrentBuild\"=\"{}\"\n\
+         \"CurrentBuildNumber\"=\"{}\"\n\
+         \"CurrentVersion\"=\"{}.{}\"\n\n\
+         [HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Windows]\n\
+         \"CSDVersion\"=dword:00000000\n\n\
+         [HKEY_CURRENT_USER\\Software\\Wine]\n\
+         \"Version\"=\"{}\"\n",
+        product, sp, build_num, build_num, major, minor, ver_str
+    );
+    
+    let tmp_dir = std::env::temp_dir();
+    let reg_file = tmp_dir.join("protontool_winver.reg");
+    
+    if let Err(e) = std::fs::write(&reg_file, &reg_content) {
+        eprintln!("Failed to write registry file: {}", e);
+        return;
+    }
+    
+    match wine_ctx.run_wine_no_cwd(&["regedit", "/S", &reg_file.to_string_lossy()]) {
+        Ok(_) => println!("Windows version set to: {}", product),
+        Err(e) => eprintln!("Failed to set Windows version: {}", e),
+    }
+    
+    std::fs::remove_file(&reg_file).ok();
+}
+
+// ============================================================================
+// VIRTUAL DESKTOP SETTINGS
+// ============================================================================
+
+fn run_virtual_desktop_gui(wine_ctx: &crate::wine::WineContext) {
+    let gui_tool = match crate::gui::get_gui_tool() {
+        Some(tool) => tool,
+        None => return,
+    };
+    
+    let args = vec![
+        "--list",
+        "--title", "Virtual Desktop",
+        "--column", "Action",
+        "--column", "Description",
+        "--print-column", "1",
+        "--width", "500",
+        "--height", "250",
+        "enable", "Enable virtual desktop",
+        "disable", "Disable virtual desktop (fullscreen)",
+    ];
+    
+    let output = match std::process::Command::new(&gui_tool).args(&args).output() {
+        Ok(out) => out,
+        Err(_) => return,
+    };
+    
+    if !output.status.success() {
+        return;
+    }
+    
+    let selected = output_to_string(&output);
+    match selected.as_str() {
+        "enable" => enable_virtual_desktop_gui(&gui_tool, wine_ctx),
+        "disable" => disable_virtual_desktop(wine_ctx),
+        _ => {}
+    }
+}
+
+fn enable_virtual_desktop_gui(gui_tool: &std::path::Path, wine_ctx: &crate::wine::WineContext) {
+    // Get resolution
+    let args = vec![
+        "--list",
+        "--title", "Virtual Desktop Resolution",
+        "--column", "Resolution",
+        "--column", "Aspect Ratio",
+        "--print-column", "1",
+        "--width", "400",
+        "--height", "400",
+        "1920x1080", "16:9 (Full HD)",
+        "2560x1440", "16:9 (QHD)",
+        "3840x2160", "16:9 (4K)",
+        "1280x720", "16:9 (HD)",
+        "1600x900", "16:9",
+        "1366x768", "16:9",
+        "1280x1024", "5:4",
+        "1024x768", "4:3",
+        "800x600", "4:3",
+    ];
+    
+    let output = match std::process::Command::new(gui_tool).args(&args).output() {
+        Ok(out) => out,
+        Err(_) => return,
+    };
+    
+    if !output.status.success() {
+        return;
+    }
+    
+    let resolution = output_to_string(&output);
+    if resolution.is_empty() {
+        return;
+    }
+    
+    let reg_content = format!(
+        "Windows Registry Editor Version 5.00\n\n\
+         [HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n\
+         \"Desktop\"=\"Default\"\n\n\
+         [HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]\n\
+         \"Default\"=\"{}\"\n",
+        resolution
+    );
+    
+    let tmp_dir = std::env::temp_dir();
+    let reg_file = tmp_dir.join("protontool_desktop.reg");
+    
+    if let Err(e) = std::fs::write(&reg_file, &reg_content) {
+        eprintln!("Failed to write registry file: {}", e);
+        return;
+    }
+    
+    match wine_ctx.run_wine_no_cwd(&["regedit", "/S", &reg_file.to_string_lossy()]) {
+        Ok(_) => println!("Virtual desktop enabled at {}", resolution),
+        Err(e) => eprintln!("Failed to enable virtual desktop: {}", e),
+    }
+    
+    std::fs::remove_file(&reg_file).ok();
+}
+
+fn disable_virtual_desktop(wine_ctx: &crate::wine::WineContext) {
+    let reg_content = 
+        "Windows Registry Editor Version 5.00\n\n\
+         [HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n\
+         \"Desktop\"=-\n";
+    
+    let tmp_dir = std::env::temp_dir();
+    let reg_file = tmp_dir.join("protontool_desktop.reg");
+    
+    if let Err(e) = std::fs::write(&reg_file, reg_content) {
+        eprintln!("Failed to write registry file: {}", e);
+        return;
+    }
+    
+    match wine_ctx.run_wine_no_cwd(&["regedit", "/S", &reg_file.to_string_lossy()]) {
+        Ok(_) => println!("Virtual desktop disabled"),
+        Err(e) => eprintln!("Failed to disable virtual desktop: {}", e),
+    }
+    
+    std::fs::remove_file(&reg_file).ok();
+}
+
+// ============================================================================
+// THEME SETTINGS
+// ============================================================================
+
+fn select_theme_gui(wine_ctx: &crate::wine::WineContext) -> Option<String> {
+    let gui_tool = crate::gui::get_gui_tool()?;
+    
+    // Get available themes from the prefix
+    let themes = get_available_themes(wine_ctx);
+    
+    let mut args = vec![
+        "--list".to_string(),
+        "--title".to_string(), "Select Theme".to_string(),
+        "--column".to_string(), "Theme".to_string(),
+        "--column".to_string(), "Description".to_string(),
+        "--print-column".to_string(), "1".to_string(),
+        "--width".to_string(), "500".to_string(),
+        "--height".to_string(), "400".to_string(),
+        // Built-in themes
+        "(none)".to_string(), "No theme (classic Windows look)".to_string(),
+        "Light".to_string(), "Light theme".to_string(),
+        "Dark".to_string(), "Dark theme".to_string(),
+    ];
+    
+    // Add any custom themes found in the prefix
+    for theme in &themes {
+        if theme != "Light" && theme != "Dark" {
+            args.push(theme.clone());
+            args.push("Custom theme".to_string());
+        }
+    }
+    
+    let output = std::process::Command::new(&gui_tool)
+        .args(&args)
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let selected = output_to_string(&output);
+    if selected.is_empty() { None } else { Some(selected) }
+}
+
+fn get_available_themes(wine_ctx: &crate::wine::WineContext) -> Vec<String> {
+    let mut themes = Vec::new();
+    
+    // Check for .msstyles files in the prefix's Resources/Themes directory
+    let prefix_path = &wine_ctx.prefix_path;
+    let themes_dir = prefix_path.join("drive_c/windows/Resources/Themes");
+    
+    if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name() {
+                    let name_str = name.to_string_lossy().to_string();
+                    // Check if it has a .msstyles file
+                    let msstyles = path.join(format!("{}.msstyles", name_str));
+                    if msstyles.exists() {
+                        themes.push(name_str);
+                    }
+                }
+            }
+        }
+    }
+    
+    themes
+}
+
+fn set_wine_theme(wine_ctx: &crate::wine::WineContext, theme: &str) {
+    let prefix_path = &wine_ctx.prefix_path;
+    
+    let (color_scheme, msstyles_path) = if theme == "(none)" {
+        // Remove theme
+        ("".to_string(), "".to_string())
+    } else {
+        // Set theme path
+        let theme_path = format!(
+            "C:\\\\windows\\\\Resources\\\\Themes\\\\{}\\\\{}.msstyles",
+            theme, theme
+        );
+        ("NormalColor".to_string(), theme_path)
+    };
+    
+    // Create basic theme directories if they don't exist
+    let themes_dir = prefix_path.join("drive_c/windows/Resources/Themes");
+    std::fs::create_dir_all(&themes_dir).ok();
+    
+    // Create Light theme if it doesn't exist
+    create_builtin_theme(&themes_dir, "Light");
+    create_builtin_theme(&themes_dir, "Dark");
+    
+    let reg_content = if theme == "(none)" {
+        "Windows Registry Editor Version 5.00\n\n\
+         [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager]\n\
+         \"ColorName\"=\"\"\n\
+         \"DllName\"=\"\"\n\
+         \"ThemeActive\"=\"0\"\n".to_string()
+    } else {
+        format!(
+            "Windows Registry Editor Version 5.00\n\n\
+             [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager]\n\
+             \"ColorName\"=\"{}\"\n\
+             \"DllName\"=\"{}\"\n\
+             \"ThemeActive\"=\"1\"\n",
+            color_scheme, msstyles_path
+        )
+    };
+    
+    let tmp_dir = std::env::temp_dir();
+    let reg_file = tmp_dir.join("protontool_theme.reg");
+    
+    if let Err(e) = std::fs::write(&reg_file, &reg_content) {
+        eprintln!("Failed to write registry file: {}", e);
+        return;
+    }
+    
+    match wine_ctx.run_wine_no_cwd(&["regedit", "/S", &reg_file.to_string_lossy()]) {
+        Ok(_) => {
+            if theme == "(none)" {
+                println!("Theme disabled (classic Windows look)");
+            } else {
+                println!("Theme set to: {}", theme);
+            }
+        }
+        Err(e) => eprintln!("Failed to set theme: {}", e),
+    }
+    
+    std::fs::remove_file(&reg_file).ok();
+}
+
+fn create_builtin_theme(themes_dir: &std::path::Path, name: &str) {
+    let theme_dir = themes_dir.join(name);
+    let msstyles_path = theme_dir.join(format!("{}.msstyles", name));
+    
+    // Only create if it doesn't exist
+    if !msstyles_path.exists() {
+        std::fs::create_dir_all(&theme_dir).ok();
+        // Create an empty placeholder - Wine will use its builtin rendering
+        std::fs::write(&msstyles_path, b"").ok();
+    }
+}
+
+// ============================================================================
+// LOG VIEWER
+// ============================================================================
+
+struct LogViewerState {
+    show_error: bool,
+    show_warning: bool,
+    show_info: bool,
+    show_debug: bool,
+    search_filter: String,
+}
+
+impl Default for LogViewerState {
+    fn default() -> Self {
+        Self {
+            show_error: true,
+            show_warning: true,
+            show_info: true,
+            show_debug: false,
+            search_filter: String::new(),
+        }
+    }
+}
+
+/// Run the log viewer GUI with filter controls and refresh
+pub fn run_log_viewer_gui() {
+    let gui_tool = match crate::gui::get_gui_tool() {
+        Some(tool) => tool,
+        None => {
+            eprintln!("No GUI tool available (zenity/yad)");
+            return;
+        }
+    };
+    
+    let mut state = LogViewerState::default();
+    
+    loop {
+        // Step 1: Show filter/search options
+        let filter_args = vec![
+            "--forms",
+            "--title", "Log Viewer - Filters",
+            "--text", "Configure log filters:",
+            "--add-combo", "Show Errors",
+            "--combo-values", "Yes|No",
+            "--add-combo", "Show Warnings", 
+            "--combo-values", "Yes|No",
+            "--add-combo", "Show Info",
+            "--combo-values", "Yes|No",
+            "--add-combo", "Show Debug",
+            "--combo-values", "Yes|No",
+            "--add-entry", "Search",
+            "--separator", "|",
+            "--width", "400",
+        ];
+        
+        let filter_output = std::process::Command::new(&gui_tool)
+            .args(&filter_args)
+            .output();
+        
+        let filters = match filter_output {
+            Ok(out) if out.status.success() => output_to_string(&out),
+            _ => return, // User cancelled
+        };
+        
+        // Parse filter selections (format: "Yes|Yes|Yes|No|searchterm")
+        let parts: Vec<&str> = filters.split('|').collect();
+        state.show_error = parts.first().map(|s| *s != "No").unwrap_or(true);
+        state.show_warning = parts.get(1).map(|s| *s != "No").unwrap_or(true);
+        state.show_info = parts.get(2).map(|s| *s != "No").unwrap_or(true);
+        state.show_debug = parts.get(3).map(|s| *s == "Yes").unwrap_or(false);
+        state.search_filter = parts.get(4).map(|s| s.to_string()).unwrap_or_default();
+        
+        // Step 2: Get and display log entries
+        loop {
+            let search = if state.search_filter.is_empty() {
+                None
+            } else {
+                Some(state.search_filter.as_str())
+            };
+            
+            let entries = crate::log::parse_log_deduplicated(
+                state.show_error,
+                state.show_warning,
+                state.show_info,
+                state.show_debug,
+                search,
+            );
+            
+            // Build list arguments
+            let mut list_args = vec![
+                "--list".to_string(),
+                "--title".to_string(),
+                "Log Viewer".to_string(),
+                "--column".to_string(), "Type".to_string(),
+                "--column".to_string(), "Count".to_string(),
+                "--column".to_string(), "Time".to_string(),
+                "--column".to_string(), "Message".to_string(),
+                "--width".to_string(), "900".to_string(),
+                "--height".to_string(), "400".to_string(),
+                "--ok-label".to_string(), "Refresh".to_string(),
+                "--cancel-label".to_string(), "Close".to_string(),
+                "--extra-button".to_string(), "Change Filters".to_string(),
+            ];
+            
+            if entries.is_empty() {
+                list_args.push("--".to_string());
+                list_args.push("0".to_string());
+                list_args.push("--".to_string());
+                list_args.push("No log entries match the current filters".to_string());
+            } else {
+                for entry in &entries {
+                    list_args.push(entry.level.clone());
+                    list_args.push(entry.count.to_string());
+                    list_args.push(entry.timestamp.clone());
+                    // Truncate long messages for display
+                    let msg = if entry.message.len() > 100 {
+                        format!("{}...", &entry.message[..100])
+                    } else {
+                        entry.message.clone()
+                    };
+                    list_args.push(msg);
+                }
+            }
+            
+            let list_output = std::process::Command::new(&gui_tool)
+                .args(&list_args)
+                .output();
+            
+            match list_output {
+                Ok(out) => {
+                    let output_str = output_to_string(&out);
+                    if output_str.contains("Change Filters") {
+                        // Go back to filter selection
+                        break;
+                    } else if out.status.success() {
+                        // Refresh - continue loop
+                        continue;
+                    } else {
+                        // Close
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    }
+}
+
+/// CLI command to view logs
+pub fn view_logs_cli(lines: Option<usize>, level: Option<&str>, search: Option<&str>) {
+    let show_error = level.map(|l| l.contains("error") || l == "all").unwrap_or(true);
+    let show_warning = level.map(|l| l.contains("warn") || l == "all").unwrap_or(true);
+    let show_info = level.map(|l| l.contains("info") || l == "all").unwrap_or(true);
+    let show_debug = level.map(|l| l.contains("debug") || l == "all").unwrap_or(false);
+    
+    let entries = crate::log::parse_log_deduplicated(
+        show_error,
+        show_warning,
+        show_info,
+        show_debug,
+        search,
+    );
+    
+    let limit = lines.unwrap_or(50);
+    
+    println!("╔════════╦═══════╦═════════════════════╦════════════════════════════════════════════════════════════╗");
+    println!("║ Level  ║ Count ║ Time                ║ Message                                                    ║");
+    println!("╠════════╬═══════╬═════════════════════╬════════════════════════════════════════════════════════════╣");
+    
+    for entry in entries.iter().take(limit) {
+        let level_colored = match entry.level.as_str() {
+            "ERROR" => format!("\x1b[31m{:6}\x1b[0m", entry.level),
+            "WARN" => format!("\x1b[33m{:6}\x1b[0m", entry.level),
+            "INFO" => format!("\x1b[32m{:6}\x1b[0m", entry.level),
+            "DEBUG" => format!("\x1b[36m{:6}\x1b[0m", entry.level),
+            _ => format!("{:6}", entry.level),
+        };
+        
+        let msg = if entry.message.len() > 58 {
+            format!("{}...", &entry.message[..55])
+        } else {
+            entry.message.clone()
+        };
+        
+        println!("║ {} ║ {:5} ║ {:19} ║ {:58} ║",
+            level_colored,
+            entry.count,
+            &entry.timestamp[..std::cmp::min(19, entry.timestamp.len())],
+            msg
+        );
+    }
+    
+    println!("╚════════╩═══════╩═════════════════════╩════════════════════════════════════════════════════════════╝");
+    
+    if entries.len() > limit {
+        println!("Showing {} of {} entries. Use --lines to see more.", limit, entries.len());
+    }
+}
+
+// ============================================================================
+// REGISTRY IMPORT
+// ============================================================================
+
+fn run_registry_import_gui(wine_ctx: &crate::wine::WineContext) {
+    let gui_tool = match crate::gui::get_gui_tool() {
+        Some(tool) => tool,
+        None => return,
+    };
+    
+    // Ask how to select the file
+    let method_output = std::process::Command::new(&gui_tool)
+        .args([
+            "--list",
+            "--title", "Registry Import",
+            "--column", "Method",
+            "--column", "Description",
+            "--print-column", "1",
+            "--width", "450",
+            "--height", "200",
+            "browse", "Browse for file",
+            "manual", "Enter path manually",
+        ])
+        .output();
+    
+    let method = match method_output {
+        Ok(out) if out.status.success() => output_to_string(&out),
+        _ => return,
+    };
+    
+    let reg_path = match method.as_str() {
+        "browse" => {
+            // File selection dialog for .reg files
+            let output = std::process::Command::new(&gui_tool)
+                .args([
+                    "--file-selection",
+                    "--title", "Select Registry File to Import",
+                    "--file-filter", "Registry files | *.reg *.REG",
+                ])
+                .output();
+            
+            match output {
+                Ok(out) if out.status.success() => output_to_string(&out),
+                _ => return,
+            }
+        }
+        "manual" => {
+            // Manual entry dialog
+            let output = std::process::Command::new(&gui_tool)
+                .args([
+                    "--entry",
+                    "--title", "Enter Registry File Path",
+                    "--text", "Enter the full path to the .reg file:",
+                    "--width", "500",
+                ])
+                .output();
+            
+            match output {
+                Ok(out) if out.status.success() => output_to_string(&out),
+                _ => return,
+            }
+        }
+        _ => return,
+    };
+    
+    if reg_path.is_empty() {
+        return;
+    }
+    
+    let path = std::path::Path::new(&reg_path);
+    if !path.exists() {
+        eprintln!("File not found: {}", reg_path);
+        return;
+    }
+    
+    // Show confirmation with file preview
+    if let Ok(content) = std::fs::read_to_string(path) {
+        let preview = if content.len() > 500 {
+            format!("{}...\n\n[truncated]", &content[..500])
+        } else {
+            content
+        };
+        
+        let confirm_output = std::process::Command::new(&gui_tool)
+            .args([
+                "--question",
+                "--title", "Confirm Registry Import",
+                "--text", &format!(
+                    "Import this registry file?\n\nFile: {}\n\nPreview:\n{}",
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    preview
+                ),
+                "--width", "600",
+            ])
+            .output();
+        
+        match confirm_output {
+            Ok(out) if out.status.success() => {}
+            _ => {
+                println!("Import cancelled.");
+                return;
+            }
+        }
+    }
+    
+    // Import the registry file
+    match wine_ctx.run_wine_no_cwd(&["regedit", "/S", &reg_path]) {
+        Ok(output) => {
+            if output.status.success() {
+                println!("Registry file imported successfully: {}", reg_path);
+                
+                // Show success dialog
+                let _ = std::process::Command::new(&gui_tool)
+                    .args([
+                        "--info",
+                        "--title", "Registry Import",
+                        "--text", "Registry file imported successfully!",
+                    ])
+                    .output();
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("Registry import may have failed: {}", stderr);
+                
+                let _ = std::process::Command::new(&gui_tool)
+                    .args([
+                        "--warning",
+                        "--title", "Registry Import",
+                        "--text", &format!("Registry import completed with warnings:\n{}", stderr),
+                    ])
+                    .output();
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to import registry file: {}", e);
+            
+            let _ = std::process::Command::new(&gui_tool)
+                .args([
+                    "--error",
+                    "--title", "Registry Import Failed",
+                    "--text", &format!("Failed to import registry file:\n{}", e),
+                ])
+                .output();
+        }
+    }
 }
 
 // ============================================================================
@@ -932,7 +1882,7 @@ fn run_verb_creator_gui() {
     
     if let Ok(out) = output {
         if out.status.success() {
-            let choice = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let choice = output_to_string(&out);
             if choice == "import" {
                 if let Some(data) = import_verb_toml_gui(&gui_tool) {
                     verb_data = data;
@@ -990,7 +1940,7 @@ fn import_verb_toml_gui(gui_tool: &std::path::Path) -> Option<VerbData> {
         return None;
     }
     
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let path = output_to_string(&output);
     if path.is_empty() {
         return None;
     }
@@ -1020,8 +1970,8 @@ fn edit_verb_simple_gui(gui_tool: &std::path::Path, data: &mut VerbData) -> bool
             return false;
         }
         
-        let output_str = String::from_utf8_lossy(&out.stdout).to_string();
-        let values: Vec<String> = output_str.trim().split('|').map(|s| s.to_string()).collect();
+        let output_str = output_to_string(&out);
+        let values: Vec<String> = output_str.split('|').map(|s| s.to_string()).collect();
         
         if values.len() >= 3 {
             data.title = values[0].clone();
@@ -1044,7 +1994,7 @@ fn edit_verb_simple_gui(gui_tool: &std::path::Path, data: &mut VerbData) -> bool
     
     if let Ok(out) = output {
         if out.status.success() {
-            data.installer_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            data.installer_path = output_to_string(&out);
         } else {
             return false;
         }
@@ -1078,7 +2028,7 @@ fn edit_verb_advanced_gui(gui_tool: &std::path::Path, data: &mut VerbData) -> bo
     
     if let Ok(out) = output {
         if out.status.success() {
-            data.category = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            data.category = output_to_string(&out);
         } else {
             return false;
         }
@@ -1105,7 +2055,7 @@ fn edit_verb_advanced_gui(gui_tool: &std::path::Path, data: &mut VerbData) -> bo
     
     if let Ok(out) = output {
         if out.status.success() {
-            data.action_type = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            data.action_type = output_to_string(&out);
         } else {
             return false;
         }
@@ -1133,8 +2083,8 @@ fn edit_verb_advanced_gui(gui_tool: &std::path::Path, data: &mut VerbData) -> bo
             return false;
         }
         
-        let output_str = String::from_utf8_lossy(&out.stdout).to_string();
-        let values: Vec<String> = output_str.trim().split('|').map(|s| s.to_string()).collect();
+        let output_str = output_to_string(&out);
+        let values: Vec<String> = output_str.split('|').map(|s| s.to_string()).collect();
         
         if values.len() >= 5 {
             if !values[0].is_empty() { data.name = values[0].clone(); }
@@ -1171,7 +2121,7 @@ fn edit_verb_advanced_gui(gui_tool: &std::path::Path, data: &mut VerbData) -> bo
         
         if let Ok(out) = output {
             if out.status.success() {
-                data.installer_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                data.installer_path = output_to_string(&out);
             } else {
                 return false;
             }
@@ -1210,7 +2160,7 @@ fn save_verb_gui(gui_tool: &std::path::Path, data: &VerbData) {
             return;
         }
         
-        let choice = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let choice = output_to_string(&out);
         
         if choice == "saveas" {
             // Let user choose location
@@ -1226,7 +2176,7 @@ fn save_verb_gui(gui_tool: &std::path::Path, data: &VerbData) {
             
             if let Ok(out) = output {
                 if out.status.success() {
-                    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    let path = output_to_string(&out);
                     if !path.is_empty() {
                         PathBuf::from(path)
                     } else {
@@ -1441,6 +2391,13 @@ fn run_command_mode(appid: Option<u32>, command: &str, parsed: &util::ParsedArgs
     let cwd_app = parsed.get_flag("cwd_app");
     let _cwd = if cwd_app { Some(steam_app.install_path.to_string_lossy().to_string()) } else { None };
 
+    // Start background wineserver if requested
+    if parsed.get_flag("background_wineserver") {
+        if let Err(e) = wine_ctx.start_wineserver() {
+            eprintln!("Warning: Failed to start background wineserver: {}", e);
+        }
+    }
+
     // Run the command with wine
     match wine_ctx.run_wine(&[command]) {
         Ok(output) => {
@@ -1526,6 +2483,13 @@ fn run_prefix_command_mode(prefix_path: &str, command: &str, parsed: &util::Pars
 
     let wine_ctx = crate::wine::WineContext::from_proton_with_arch(&proton_app, &prefix_path, saved_arch);
 
+    // Start background wineserver if requested
+    if parsed.get_flag("background_wineserver") {
+        if let Err(e) = wine_ctx.start_wineserver() {
+            eprintln!("Warning: Failed to start background wineserver: {}", e);
+        }
+    }
+
     // Run the command with wine
     match wine_ctx.run_wine(&[command]) {
         Ok(output) => {
@@ -1605,21 +2569,16 @@ fn run_create_prefix_mode(prefix_path: &str, parsed: &util::ParsedArgs, no_term:
 
     // Initialize the prefix with Proton's wine
     let wine_ctx = crate::wine::WineContext::from_proton_with_arch(&proton_app, &prefix_path, arch);
+    // Proton uses "files" subdirectory, older versions may use "dist"
+    let dist_dir = {
+        let files_dir = proton_app.install_path.join("files");
+        let dist_dir = proton_app.install_path.join("dist");
+        if files_dir.exists() { files_dir } else { dist_dir }
+    };
     
-    // Run wineboot to initialize the prefix
-    println!("Initializing prefix with wineboot...");
-    match wine_ctx.run_wine_no_cwd(&["wineboot", "--init"]) {
-        Ok(output) => {
-            if !output.status.success() {
-                eprintln!("Warning: wineboot returned non-zero exit code");
-                if !output.stderr.is_empty() {
-                    eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-                }
-            }
-        }
-        Err(e) => {
-            exit_with_error(&format!("Failed to initialize prefix: {}", e), no_term);
-        }
+    println!("Initializing prefix...");
+    if let Err(e) = crate::wine::prefix::init_prefix(&prefix_path, &dist_dir, true, Some(&wine_ctx)) {
+        exit_with_error(&format!("Failed to initialize prefix: {}", e), no_term);
     }
 
     // Save prefix metadata for future use

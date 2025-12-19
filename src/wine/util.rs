@@ -6,13 +6,27 @@ pub fn extract_archive(archive: &Path, dest: &Path) -> Result<(), String> {
         .and_then(|e| e.to_str())
         .unwrap_or("");
     
-    match ext.to_lowercase().as_str() {
-        "zip" => extract_zip(archive, dest),
-        "7z" => extract_7z(archive, dest),
-        "tar" | "gz" | "tgz" | "bz2" | "xz" => extract_tar(archive, dest),
-        "exe" => extract_exe(archive, dest),
-        "cab" => extract_cab(archive, dest, None),
-        "msi" => extract_msi(archive, dest),
+    let filename = archive.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    
+    // Check if it's a tar archive with compression
+    let is_tar_compressed = filename.contains(".tar.");
+    
+    match (ext.to_lowercase().as_str(), is_tar_compressed) {
+        ("zip", _) => extract_zip(archive, dest),
+        ("7z", _) => extract_7z(archive, dest),
+        ("tar" | "tgz" | "tbz2" | "txz" | "tlz", _) => extract_tar(archive, dest),
+        ("gz" | "bz2" | "xz" | "lz", true) => extract_tar(archive, dest),
+        ("zst", true) => extract_zst(archive, dest),
+        ("gz", false) => extract_gzip(archive, dest),
+        ("bz2", false) => extract_bzip2(archive, dest),
+        ("xz", false) => extract_xz(archive, dest),
+        ("lz", false) => extract_lzip(archive, dest),
+        ("zst", false) => extract_zst(archive, dest),
+        ("exe", _) => extract_exe(archive, dest),
+        ("cab", _) => extract_cab(archive, dest, None),
+        ("msi", _) => extract_msi(archive, dest),
         _ => Err(format!("Unsupported archive format: {}", ext)),
     }
 }
@@ -71,6 +85,207 @@ pub fn extract_tar(archive: &Path, dest: &Path) -> Result<(), String> {
     }
 
     Err("tar not available for extraction".to_string())
+}
+
+pub fn extract_zst(archive: &Path, dest: &Path) -> Result<(), String> {
+    let filename = archive.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    
+    // Check if it's a .tar.zst file
+    let is_tar_zst = filename.ends_with(".tar.zst");
+    
+    if is_tar_zst {
+        // Try tar with --zstd flag first (modern tar supports this)
+        if let Some(tar) = crate::util::which("tar") {
+            let status = Command::new(&tar)
+                .args(["--zstd", "-xf", &archive.to_string_lossy(), "-C", &dest.to_string_lossy()])
+                .status()
+                .map_err(|e| format!("Failed to run tar: {}", e))?;
+            
+            if status.success() {
+                return Ok(());
+            }
+            
+            // Fallback: pipe zstd to tar
+            if let Some(zstd) = crate::util::which("zstd") {
+                let zstd_proc = Command::new(&zstd)
+                    .args(["-d", "-c", &archive.to_string_lossy()])
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()
+                    .map_err(|e| format!("Failed to run zstd: {}", e))?;
+                
+                let status = Command::new(&tar)
+                    .args(["-xf", "-", "-C", &dest.to_string_lossy()])
+                    .stdin(zstd_proc.stdout.unwrap())
+                    .status()
+                    .map_err(|e| format!("Failed to run tar: {}", e))?;
+                
+                if status.success() {
+                    return Ok(());
+                }
+            }
+        }
+    } else {
+        // Plain .zst file - decompress to destination
+        if let Some(zstd) = crate::util::which("zstd") {
+            let output_name = archive.file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("output");
+            let output_path = dest.join(output_name);
+            
+            let status = Command::new(zstd)
+                .args(["-d", &archive.to_string_lossy(), "-o", &output_path.to_string_lossy()])
+                .status()
+                .map_err(|e| format!("Failed to run zstd: {}", e))?;
+            
+            if status.success() {
+                return Ok(());
+            }
+        }
+    }
+
+    Err("No zstd extraction tool available (zstd required, or tar with zstd support)".to_string())
+}
+
+pub fn extract_gzip(archive: &Path, dest: &Path) -> Result<(), String> {
+    let output_name = archive.file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("output");
+    let output_path = dest.join(output_name);
+    
+    // Try gzip
+    if let Some(gzip) = crate::util::which("gzip") {
+        let status = Command::new(gzip)
+            .args(["-d", "-c", &archive.to_string_lossy()])
+            .stdout(std::fs::File::create(&output_path).map_err(|e| format!("Failed to create output file: {}", e))?)
+            .status()
+            .map_err(|e| format!("Failed to run gzip: {}", e))?;
+        
+        if status.success() {
+            return Ok(());
+        }
+    }
+    
+    // Fallback to gunzip
+    if let Some(gunzip) = crate::util::which("gunzip") {
+        let status = Command::new(gunzip)
+            .args(["-c", &archive.to_string_lossy()])
+            .stdout(std::fs::File::create(&output_path).map_err(|e| format!("Failed to create output file: {}", e))?)
+            .status()
+            .map_err(|e| format!("Failed to run gunzip: {}", e))?;
+        
+        if status.success() {
+            return Ok(());
+        }
+    }
+    
+    Err("No gzip extraction tool available (gzip or gunzip required)".to_string())
+}
+
+pub fn extract_bzip2(archive: &Path, dest: &Path) -> Result<(), String> {
+    let output_name = archive.file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("output");
+    let output_path = dest.join(output_name);
+    
+    // Try bzip2
+    if let Some(bzip2) = crate::util::which("bzip2") {
+        let status = Command::new(bzip2)
+            .args(["-d", "-c", &archive.to_string_lossy()])
+            .stdout(std::fs::File::create(&output_path).map_err(|e| format!("Failed to create output file: {}", e))?)
+            .status()
+            .map_err(|e| format!("Failed to run bzip2: {}", e))?;
+        
+        if status.success() {
+            return Ok(());
+        }
+    }
+    
+    // Fallback to bunzip2
+    if let Some(bunzip2) = crate::util::which("bunzip2") {
+        let status = Command::new(bunzip2)
+            .args(["-c", &archive.to_string_lossy()])
+            .stdout(std::fs::File::create(&output_path).map_err(|e| format!("Failed to create output file: {}", e))?)
+            .status()
+            .map_err(|e| format!("Failed to run bunzip2: {}", e))?;
+        
+        if status.success() {
+            return Ok(());
+        }
+    }
+    
+    Err("No bzip2 extraction tool available (bzip2 or bunzip2 required)".to_string())
+}
+
+pub fn extract_xz(archive: &Path, dest: &Path) -> Result<(), String> {
+    let output_name = archive.file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("output");
+    let output_path = dest.join(output_name);
+    
+    // Try xz
+    if let Some(xz) = crate::util::which("xz") {
+        let status = Command::new(xz)
+            .args(["-d", "-c", &archive.to_string_lossy()])
+            .stdout(std::fs::File::create(&output_path).map_err(|e| format!("Failed to create output file: {}", e))?)
+            .status()
+            .map_err(|e| format!("Failed to run xz: {}", e))?;
+        
+        if status.success() {
+            return Ok(());
+        }
+    }
+    
+    // Fallback to unxz
+    if let Some(unxz) = crate::util::which("unxz") {
+        let status = Command::new(unxz)
+            .args(["-c", &archive.to_string_lossy()])
+            .stdout(std::fs::File::create(&output_path).map_err(|e| format!("Failed to create output file: {}", e))?)
+            .status()
+            .map_err(|e| format!("Failed to run unxz: {}", e))?;
+        
+        if status.success() {
+            return Ok(());
+        }
+    }
+    
+    Err("No xz extraction tool available (xz or unxz required)".to_string())
+}
+
+pub fn extract_lzip(archive: &Path, dest: &Path) -> Result<(), String> {
+    let output_name = archive.file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("output");
+    let output_path = dest.join(output_name);
+    
+    // Try lzip
+    if let Some(lzip) = crate::util::which("lzip") {
+        let status = Command::new(lzip)
+            .args(["-d", "-c", &archive.to_string_lossy()])
+            .stdout(std::fs::File::create(&output_path).map_err(|e| format!("Failed to create output file: {}", e))?)
+            .status()
+            .map_err(|e| format!("Failed to run lzip: {}", e))?;
+        
+        if status.success() {
+            return Ok(());
+        }
+    }
+    
+    // Fallback to lunzip
+    if let Some(lunzip) = crate::util::which("lunzip") {
+        let status = Command::new(lunzip)
+            .args(["-c", &archive.to_string_lossy()])
+            .stdout(std::fs::File::create(&output_path).map_err(|e| format!("Failed to create output file: {}", e))?)
+            .status()
+            .map_err(|e| format!("Failed to run lunzip: {}", e))?;
+        
+        if status.success() {
+            return Ok(());
+        }
+    }
+    
+    Err("No lzip extraction tool available (lzip or lunzip required)".to_string())
 }
 
 pub fn extract_exe(archive: &Path, dest: &Path) -> Result<(), String> {
@@ -170,19 +385,7 @@ pub fn copy_dll_to_system(dll_path: &Path, prefix_path: &Path, is_32bit: bool) -
     Ok(())
 }
 
-pub fn create_symlink(target: &Path, link: &Path) -> Result<(), String> {
-    if link.exists() {
-        std::fs::remove_file(link).ok();
-    }
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link)
-            .map_err(|e| format!("Failed to create symlink: {}", e))?;
-    }
-
-    Ok(())
-}
 
 pub fn get_architecture(exe_path: &Path) -> Result<Architecture, String> {
     if let Some(file_cmd) = crate::util::which("file") {

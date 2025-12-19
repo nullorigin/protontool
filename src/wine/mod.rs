@@ -1,6 +1,7 @@
 pub mod verbs;
 pub mod download;
 pub mod registry;
+pub mod prefix;
 pub mod util;
 pub mod custom;
 
@@ -126,11 +127,34 @@ impl WineContext {
         env.insert("WINE64".to_string(), wine64_path.to_string_lossy().to_string());
         env.insert("WINESERVER".to_string(), wineserver_path.to_string_lossy().to_string());
         env.insert("WINEPREFIX".to_string(), prefix_path.to_string_lossy().to_string());
-        env.insert("WINEDLLPATH".to_string(), format!(
-            "{}:{}",
-            lib_dir.join("lib64/wine").to_string_lossy(),
-            lib_dir.join("lib/wine").to_string_lossy()
-        ));
+        // Build WINEDLLPATH with all possible Wine DLL locations
+        let wine_dll_paths = [
+            lib_dir.join("lib64/wine/x86_64-unix"),
+            lib_dir.join("lib64/wine/x86_64-windows"),
+            lib_dir.join("lib64/wine/i386-unix"),
+            lib_dir.join("lib64/wine/i386-windows"),
+            lib_dir.join("lib/wine/x86_64-unix"),
+            lib_dir.join("lib/wine/x86_64-windows"),
+            lib_dir.join("lib/wine/i386-unix"),
+            lib_dir.join("lib/wine/i386-windows"),
+            lib_dir.join("lib/wine/dxvk"),
+            lib_dir.join("lib/wine/vkd3d-proton"),
+            lib_dir.join("lib/wine/vkd3d-proton/x86_64-windows"),
+            lib_dir.join("lib/wine/vkd3d-proton/i386-windows"),
+            lib_dir.join("lib/wine/nvapi"),
+            lib_dir.join("lib/wine/nvapi/x86_64-windows"),
+            lib_dir.join("lib/wine/nvapi/i386-windows"),
+            // VKD3D (non-proton) for libvkd3d-*.dll
+            lib_dir.join("lib/vkd3d/x86_64-windows"),
+            lib_dir.join("lib/vkd3d/i386-windows"),
+        ];
+        let winedllpath: String = wine_dll_paths
+            .iter()
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(":");
+        env.insert("WINEDLLPATH".to_string(), winedllpath);
         env.insert("WINELOADER".to_string(), wine_path.to_string_lossy().to_string());
         env.insert("WINEARCH".to_string(), arch.as_str().to_string());
 
@@ -283,19 +307,39 @@ impl WineContext {
     }
 
     pub fn wait_for_wineserver(&self) -> std::io::Result<Output> {
-        Command::new(&self.wineserver_path)
-            .arg("-w")
-            .env("WINEPREFIX", &self.prefix_path)
-            .output()
+        self.wineserver(&["-w"])
     }
 
     pub fn kill_wineserver(&self) -> std::io::Result<Output> {
-        Command::new(&self.wineserver_path)
-            .arg("-k")
-            .env("WINEPREFIX", &self.prefix_path)
-            .output()
+        self.wineserver(&["-k"])
     }
 
+    /// Start wineserver in the background (persistent mode)
+    /// This can improve performance when running multiple wine commands
+    pub fn start_wineserver(&self) -> std::io::Result<()> {
+        self.wineserver(&["-p"])?;
+        Ok(())
+    }
+    pub fn wineserver(&self, args: &[&str]) -> std::io::Result<Output> {
+        let mut cmd = Command::new(&self.wineserver_path);
+        let mut cleaned_args = Vec::new();
+        for arg in args {
+            cleaned_args.push(arg.trim());
+        }
+        cmd.args(&cleaned_args);
+        cmd.env("WINEPREFIX", &self.prefix_path);
+        
+        if cleaned_args.contains(&"-p") {
+            cmd.spawn()?;
+            Ok(Output {
+                status: std::process::ExitStatus::default(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        } else {
+            cmd.output()
+        }
+    }
     pub fn get_system32_path(&self) -> PathBuf {
         self.prefix_path.join("drive_c/windows/system32")
     }

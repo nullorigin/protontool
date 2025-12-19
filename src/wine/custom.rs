@@ -29,7 +29,6 @@ use super::verbs::{Verb, VerbCategory, VerbAction, LocalFile};
 /// path = "~/Downloads/SketchUpPro-2024.exe"
 /// args = ["/S"]
 /// ```
-
 pub fn get_custom_verbs_dir() -> PathBuf {
     crate::config::get_verbs_dir()
 }

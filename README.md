@@ -1,6 +1,6 @@
 # protontool
 
-A comprehensive tool for managing Wine/Proton prefixes with built-in component installation (DLLs, fonts, runtimes, applications), custom verb creation, intelligent error detection, and Steam game integration.
+A comprehensive tool for managing Wine/Proton prefixes with built-in component installation (DLLs, fonts, runtimes), custom verb creation, intelligent error detection, and Steam game integration.
 
 ## Features
 
@@ -10,6 +10,7 @@ A comprehensive tool for managing Wine/Proton prefixes with built-in component i
 - **Smart Logging** - Automatic detection and explanation of Wine errors with a curated database of known issues
 - **GUI Support** - Interactive dialogs via zenity or yad for prefix selection, verb installation, and verb creation
 - **Steam Integration** - Automatic detection of Steam libraries, games, and Proton versions
+- **Proton Compatibility** - Creates prefixes by copying from Proton's default_pfx for proper DLL structure
 
 ## Building
 
@@ -212,7 +213,8 @@ src/
 ├── lib.rs               # Library root
 ├── bin/
 │   ├── launch.rs        # protontool-launch binary
-│   └── desktop_install.rs
+│   ├── desktop_install.rs # Desktop shortcut installer
+│   └── wine_extract.rs  # Dev tool for Wine source extraction
 ├── cli/
 │   ├── mod.rs           # CLI logic, GUI handlers, verb creator
 │   └── util.rs          # Argument parsing
@@ -221,24 +223,19 @@ src/
 ├── log.rs               # Logging with error detection
 ├── wine_data.rs         # Auto-generated Wine debug data
 ├── steam.rs             # Steam installation detection
-├── util.rs              # Utilities (run_command, which, etc.)
+├── util.rs              # Utilities (shell_quote, which, etc.)
 ├── vdf/
 │   ├── mod.rs
 │   ├── parser.rs        # Valve Data Format parser
 │   └── vdict.rs         # VDF dictionary structure
 └── wine/
     ├── mod.rs           # Wine module root, WineContext
+    ├── prefix.rs        # Prefix initialization (copies from default_pfx)
     ├── verbs.rs         # Built-in verb registry
     ├── custom.rs        # Custom TOML verb loader
     ├── registry.rs      # Windows registry operations
     ├── download.rs      # File download utilities
-    └── ...
-
-tools/
-└── wine-extract/        # Dev tool for Wine source extraction
-    ├── src/main.rs
-    ├── Cargo.toml
-    └── README.md
+    └── util.rs          # Wine utilities
 ```
 
 ## Development Tools
@@ -248,14 +245,17 @@ tools/
 A development tool to extract debug information from Wine/Proton source code and regenerate `wine_data.rs`:
 
 ```bash
-cd tools/wine-extract
-cargo build --release
-
-# Regenerate wine_data.rs from Wine source
-./target/release/wine-extract \
+# Build and run wine-extract
+cargo run --bin wine-extract -- \
     --wine-path /path/to/wine \
-    --output ../../src/wine_data.rs \
+    --output src/wine_data.rs \
     protontool
+
+# Or regenerate all data
+cargo run --bin wine-extract -- \
+    --wine-path /path/to/wine \
+    --output src/wine_data.rs \
+    all
 ```
 
 This extracts:

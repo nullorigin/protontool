@@ -3,6 +3,26 @@ use std::path::{Path, PathBuf};
 
 use crate::vdf::{parse_vdf, VDFDict};
 
+pub fn is_steam_deck() -> bool {
+    if let Ok(board) = fs::read_to_string("/sys/class/dmi/id/board_name") {
+        return board.trim() == "Jupiter";
+    }
+    false
+}
+
+pub fn is_steamos() -> bool {
+    let os_release = Path::new("/etc/os-release");
+    if let Ok(content) = fs::read_to_string(os_release) {
+        for line in content.lines() {
+            if line.starts_with("ID=") {
+                let id = line.trim_start_matches("ID=").trim_matches('"');
+                return id == "steamos";
+            }
+        }
+    }
+    false
+}
+
 #[derive(Debug, Clone)]
 pub struct SteamInstallation {
     pub steam_path: PathBuf,

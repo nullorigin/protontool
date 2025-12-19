@@ -5,7 +5,7 @@ use std::process::{self, Command};
 use protontool::cli::util::{ArgParser, enable_logging, exit_with_error};
 use protontool::steam::{find_steam_installations, get_steam_apps, get_steam_lib_paths, SteamApp};
 use protontool::gui::{select_steam_installation, select_steam_library_paths};
-use protontool::util::{shell_quote, which};
+use protontool::util::{shell_quote, which, output_to_string};
 
 #[derive(Debug)]
 enum LaunchTarget {
@@ -33,10 +33,7 @@ fn main() {
 
     parser.add_flag("no_term", &["--no-term"], "Program was launched from desktop");
     parser.add_flag("verbose", &["-v", "--verbose"], "Increase log verbosity");
-    parser.add_flag("no_runtime", &["--no-runtime"], "Disable Steam Runtime");
-    parser.add_flag("no_bwrap", &["--no-bwrap"], "Disable bwrap containerization");
-    parser.add_flag("background_wineserver", &["--background-wineserver"], "Launch background wineserver");
-    parser.add_flag("no_background_wineserver", &["--no-background-wineserver"], "No background wineserver");
+    parser.add_flag("background_wineserver", &["--background-wineserver"], "Start wineserver in background before running commands");
     parser.add_option("appid", &["--appid"], "Steam app ID");
     parser.add_option("prefix", &["--prefix"], "Use a custom prefix by name");
     parser.add_flag("cwd_app", &["--cwd-app"], "Set working directory to app's install dir");
@@ -132,18 +129,8 @@ fn main() {
         cli_args.push(format!("-{}", "v".repeat(verbose as usize)));
     }
 
-    if parsed.get_flag("no_runtime") {
-        cli_args.push("--no-runtime".to_string());
-    }
-
-    if parsed.get_flag("no_bwrap") {
-        cli_args.push("--no-bwrap".to_string());
-    }
-
     if parsed.get_flag("background_wineserver") {
         cli_args.push("--background-wineserver".to_string());
-    } else if parsed.get_flag("no_background_wineserver") {
-        cli_args.push("--no-background-wineserver".to_string());
     }
 
     if no_term {
@@ -243,7 +230,7 @@ fn select_launch_target_gui(
         return None;
     }
     
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = output_to_string(&output);
     if selected.is_empty() {
         return None;
     }

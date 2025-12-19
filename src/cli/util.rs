@@ -54,8 +54,8 @@ pub fn exit_with_error(error: &str, desktop: bool) -> ! {
     let log_messages = fs::read_to_string(get_log_file_path())
         .unwrap_or_else(|_| "!! LOG FILE NOT FOUND !!".to_string());
 
-    let is_steam_deck = crate::util::is_steam_deck();
-    let is_steamos = crate::util::is_steamos();
+    let is_steam_deck = crate::steam::is_steam_deck();
+    let is_steamos = crate::steam::is_steamos();
 
     let message = format!(
         "protontool was closed due to the following error:\n\n\
@@ -96,8 +96,8 @@ pub struct ParsedArgs {
     positional: Vec<String>,
 }
 
-impl ParsedArgs {
-    pub fn new() -> Self {
+impl Default for ParsedArgs {
+    fn default() -> Self {
         Self {
             flags: HashMap::new(),
             options: HashMap::new(),
@@ -105,9 +105,15 @@ impl ParsedArgs {
             positional: Vec::new(),
         }
     }
+}
+
+impl ParsedArgs {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn get_flag(&self, name: &str) -> bool {
-        self.flags.get(name).map_or(false, |&v| v > 0)
+        self.flags.get(name).is_some_and(|&v| v > 0)
     }
 
     pub fn get_count(&self, name: &str) -> u32 {

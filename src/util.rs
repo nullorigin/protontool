@@ -1,116 +1,17 @@
 use std::env;
 use std::fs;
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::Output;
+use std::os::unix::fs::symlink;
 
-pub fn is_steam_deck() -> bool {
-    if let Ok(board) = fs::read_to_string("/sys/class/dmi/id/board_name") {
-        return board.trim() == "Jupiter";
-    }
-    false
+/// Extract stdout from a command output as a trimmed string
+pub fn output_to_string(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-pub fn is_steamos() -> bool {
-    let os_release = Path::new("/etc/os-release");
-    if let Ok(content) = fs::read_to_string(os_release) {
-        for line in content.lines() {
-            if line.starts_with("ID=") {
-                let id = line.trim_start_matches("ID=").trim_matches('"');
-                return id == "steamos";
-            }
-        }
-    }
-    false
-}
-
-pub fn run_command(
-    _wine_path: &Path,
-    proton_app: &crate::steam::ProtonApp,
-    steam_app: &crate::steam::SteamApp,
-    use_steam_runtime: bool,
-    legacy_steam_runtime_path: Option<&Path>,
-    command: &[String],
-    _use_bwrap: Option<bool>,
-    _start_wineserver: bool,
-    cwd: Option<&str>,
-    shell: bool,
-) -> i32 {
-    let proton_dist = proton_app.install_path.join("dist");
-    let proton_files = proton_app.install_path.join("files");
-    
-    let wine_path = if proton_dist.exists() {
-        proton_dist.join("bin/wine")
-    } else {
-        proton_files.join("bin/wine")
-    };
-    
-    let wineserver_path = wine_path.parent().unwrap().join("wineserver");
-    
-    let prefix_path = steam_app.prefix_path.as_ref()
-        .map(|p| p.parent().unwrap().to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-    
-    let mut cmd_env: Vec<(String, String)> = Vec::new();
-    
-    cmd_env.push(("WINE".to_string(), wine_path.to_string_lossy().to_string()));
-    cmd_env.push(("WINESERVER".to_string(), wineserver_path.to_string_lossy().to_string()));
-    cmd_env.push(("WINEPREFIX".to_string(), prefix_path.to_string_lossy().to_string()));
-    cmd_env.push(("WINEDLLPATH".to_string(), format!(
-        "{}:{}",
-        wine_path.parent().unwrap().parent().unwrap().join("lib64/wine").to_string_lossy(),
-        wine_path.parent().unwrap().parent().unwrap().join("lib/wine").to_string_lossy()
-    )));
-    
-    cmd_env.push(("STEAM_APPID".to_string(), steam_app.appid.to_string()));
-    cmd_env.push(("STEAM_APP_PATH".to_string(), steam_app.install_path.to_string_lossy().to_string()));
-    cmd_env.push(("PROTON_PATH".to_string(), proton_app.install_path.to_string_lossy().to_string()));
-    
-    if use_steam_runtime {
-        if let Some(runtime_path) = legacy_steam_runtime_path {
-            let ld_path = format!(
-                "{}:{}",
-                runtime_path.join("i386/lib/i386-linux-gnu").to_string_lossy(),
-                runtime_path.join("amd64/lib/x86_64-linux-gnu").to_string_lossy()
-            );
-            if let Ok(existing) = env::var("LD_LIBRARY_PATH") {
-                cmd_env.push(("LD_LIBRARY_PATH".to_string(), format!("{}:{}", ld_path, existing)));
-            } else {
-                cmd_env.push(("LD_LIBRARY_PATH".to_string(), ld_path));
-            }
-        }
-    }
-    
-    let working_dir = cwd.map(|s| s.to_string())
-        .unwrap_or_else(|| env::current_dir().unwrap().to_string_lossy().to_string());
-    
-    let status = if shell {
-        let shell_cmd = command.join(" ");
-        let mut process = Command::new("sh");
-        process.arg("-c").arg(&shell_cmd);
-        process.current_dir(&working_dir);
-        for (key, val) in &cmd_env {
-            process.env(key, val);
-        }
-        process.status()
-    } else {
-        if command.is_empty() {
-            return 1;
-        }
-        let mut process = Command::new(&command[0]);
-        if command.len() > 1 {
-            process.args(&command[1..]);
-        }
-        process.current_dir(&working_dir);
-        for (key, val) in &cmd_env {
-            process.env(key, val);
-        }
-        process.status()
-    };
-    
-    match status {
-        Ok(s) => s.code().unwrap_or(1),
-        Err(_) => 1,
-    }
+/// Extract stderr from a command output as a trimmed string  
+pub fn output_stderr_to_string(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).trim().to_string()
 }
 
 pub fn which(name: &str) -> Option<std::path::PathBuf> {
@@ -158,3 +59,110 @@ pub fn shell_quote(s: &str) -> String {
     quoted.push('\'');
     quoted
 }
+
+/// Recursively walk directory and collect files with given extension
+pub fn walk_dir_files_with_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    walk_dir_files_with_ext_recursive(dir, ext, &mut files);
+    files
+}
+
+fn walk_dir_files_with_ext_recursive(dir: &Path, ext: &str, files: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Use symlink_metadata to avoid following symlinks
+            let metadata = match path.symlink_metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            // Skip symlinks to avoid infinite loops
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                walk_dir_files_with_ext_recursive(&path, ext, files);
+            } else if metadata.is_file() && path.extension().map_or(false, |e| e == ext) {
+                files.push(path);
+            }
+        }
+    }
+}
+
+/// Parse hex value from string like "0x12345678" or "0X12345678"
+pub fn parse_hex(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if s.len() > 2 && (s.starts_with("0x") || s.starts_with("0X")) {
+        u32::from_str_radix(&s[2..], 16).ok()
+    } else {
+        None
+    }
+}
+
+/// Calculate relative path from base directory to target
+pub fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
+    let from = from.canonicalize().ok()?;
+    let to = to.canonicalize().ok()?;
+    
+    let from_parts: Vec<_> = from.components().collect();
+    let to_parts: Vec<_> = to.components().collect();
+    
+    // Find common prefix length
+    let common_len = from_parts.iter()
+        .zip(to_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    
+    // Build relative path
+    let mut result = PathBuf::new();
+    
+    // Add ".." for each remaining component in from
+    for _ in common_len..from_parts.len() {
+        result.push("..");
+    }
+    
+    // Add remaining components from to
+    for part in &to_parts[common_len..] {
+        result.push(part);
+    }
+    
+    Some(result)
+}
+pub fn make_symlink(target: &Path, link: &Path, relative: bool) -> std::io::Result<()> {
+    if link.exists() {
+        std::fs::remove_file(link).ok();
+    }
+
+    #[cfg(unix)]
+    {
+        if relative {
+            let target = target.canonicalize()?;
+            let linkname_abs = if link.is_absolute() {
+                link.to_path_buf()
+            } else {
+                env::current_dir()?.join(link)
+            };
+            
+            let link_dir = linkname_abs.parent().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid link path")
+            })?;
+            
+            // Calculate relative path from link directory to target
+            let rel_path = relative_path(link_dir, &target).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Cannot compute relative path")
+            })?;
+            
+            symlink(&rel_path, &linkname_abs)?;
+        } else {
+            symlink(target, link)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Create a relative symlink from linkname pointing to target
+pub fn make_relative_symlink(target: &Path, linkname: &Path) -> std::io::Result<()> {
+    make_symlink(target, linkname, true)
+}
+
