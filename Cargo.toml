@@ -1,6 +1,6 @@
 [package]
 name = "protontool"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["Matthew Fay"]
 description = "A tool for configuring Wine/Proton prefixes to be used with Proton/Steam"

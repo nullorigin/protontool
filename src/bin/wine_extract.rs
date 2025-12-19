@@ -1,5 +1,5 @@
 //! Wine/Proton source code extractor
-//! 
+//!
 //! Extracts debug information from Wine source code and generates Rust tables.
 //! Part of protontool - uses shared utilities from the main crate.
 
@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use protontool::util::{walk_dir_files_with_ext, parse_hex};
+use protontool::util::{parse_hex, walk_dir_files_with_ext};
 
 /// CLI arguments
 struct Args {
@@ -30,7 +30,8 @@ enum Command {
 }
 
 fn print_help() {
-    eprintln!(r#"wine-extract - Extract debug information from Wine/Proton source code
+    eprintln!(
+        r#"wine-extract - Extract debug information from Wine/Proton source code
 
 USAGE:
     wine-extract [OPTIONS] <COMMAND>
@@ -47,17 +48,18 @@ COMMANDS:
     winerror    Extract HRESULT/Win32 error codes from winerror.h
     all         Extract all debug info and generate complete Rust module
     protontool  Generate wine_data.rs module for protontool
-"#);
+"#
+    );
 }
 
 fn parse_args() -> Result<Args, String> {
     let args: Vec<String> = env::args().collect();
-    
+
     let mut wine_path = None;
     let mut proton_path = None;
     let mut output = None;
     let mut command = None;
-    
+
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -104,9 +106,9 @@ fn parse_args() -> Result<Args, String> {
         }
         i += 1;
     }
-    
+
     let command = command.ok_or("No command specified. Use --help for usage.")?;
-    
+
     Ok(Args {
         wine_path,
         proton_path,
@@ -124,14 +126,14 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
     };
-    
+
     if args.command == Command::Help {
         print_help();
         return Ok(());
     }
 
     let wine_path = resolve_wine_path(&args)?;
-    
+
     eprintln!("Using Wine source at: {:?}", wine_path);
 
     let output = match &args.command {
@@ -165,18 +167,21 @@ fn resolve_wine_path(args: &Args) -> io::Result<PathBuf> {
                 format!("Proton path does not exist: {:?}", proton_path),
             ));
         }
-        
+
         let wine_subdir = proton_path.join("wine");
         if wine_subdir.exists() && wine_subdir.join("dlls").exists() {
             return Ok(wine_subdir);
         }
-        
+
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("Wine source not found in Proton repository at {:?}/wine", proton_path),
+            format!(
+                "Wine source not found in Proton repository at {:?}/wine",
+                proton_path
+            ),
         ));
     }
-    
+
     if let Some(wine_path) = &args.wine_path {
         if !wine_path.exists() {
             return Err(io::Error::new(
@@ -184,23 +189,26 @@ fn resolve_wine_path(args: &Args) -> io::Result<PathBuf> {
                 format!("Wine path does not exist: {:?}", wine_path),
             ));
         }
-        
+
         if wine_path.join("dlls").exists() {
             return Ok(wine_path.clone());
         }
-        
+
         let wine_subdir = wine_path.join("wine");
         if wine_subdir.exists() && wine_subdir.join("dlls").exists() {
             eprintln!("Auto-detected Proton repository, using wine/ subdirectory");
             return Ok(wine_subdir);
         }
-        
+
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("Not a valid Wine source directory: {:?} (missing dlls/ folder)", wine_path),
+            format!(
+                "Not a valid Wine source directory: {:?} (missing dlls/ folder)",
+                wine_path
+            ),
         ));
     }
-    
+
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
         "Must specify either --wine-path or --proton-path",
@@ -211,13 +219,14 @@ fn resolve_wine_path(args: &Args) -> io::Result<PathBuf> {
 fn extract_debug_channel(content: &str) -> Vec<String> {
     let mut channels = Vec::new();
     let pattern = "WINE_DEFAULT_DEBUG_CHANNEL";
-    
+
     for line in content.lines() {
         if let Some(pos) = line.find(pattern) {
             let rest = &line[pos + pattern.len()..];
             if let Some(start) = rest.find('(') {
                 let after_paren = &rest[start + 1..];
-                let end = after_paren.find(|c: char| c == ')' || c.is_whitespace())
+                let end = after_paren
+                    .find(|c: char| c == ')' || c.is_whitespace())
                     .unwrap_or(after_paren.len());
                 let channel = after_paren[..end].trim();
                 if !channel.is_empty() && channel.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -232,24 +241,26 @@ fn extract_debug_channel(content: &str) -> Vec<String> {
 /// Extract #define STATUS_NAME ((NTSTATUS) 0xXXXXXXXX) patterns
 fn extract_ntstatus_defines(content: &str) -> Vec<(String, u32)> {
     let mut results = Vec::new();
-    
+
     for line in content.lines() {
         let line = line.trim();
         if !line.starts_with("#define") {
             continue;
         }
-        
+
         if let Some(status_pos) = line.find("STATUS_") {
             let name_start = status_pos;
             let rest = &line[name_start..];
-            let name_end = rest.find(|c: char| c.is_whitespace() || c == '(')
+            let name_end = rest
+                .find(|c: char| c.is_whitespace() || c == '(')
                 .unwrap_or(rest.len());
             let name = &rest[..name_end];
-            
+
             if line.contains("((NTSTATUS)") || line.contains("(( NTSTATUS )") {
                 if let Some(hex_pos) = line.find("0x").or_else(|| line.find("0X")) {
                     let hex_rest = &line[hex_pos..];
-                    let hex_end = hex_rest.find(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X')
+                    let hex_end = hex_rest
+                        .find(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X')
                         .unwrap_or(hex_rest.len());
                     if let Some(code) = parse_hex(&hex_rest[..hex_end]) {
                         if code >= 0x80000000 {
@@ -267,25 +278,26 @@ fn extract_ntstatus_defines(content: &str) -> Vec<(String, u32)> {
 fn extract_winerror_defines(content: &str) -> (Vec<(String, u32)>, Vec<(String, u32)>) {
     let mut hresults = Vec::new();
     let mut win32_errors = Vec::new();
-    
+
     for line in content.lines() {
         let line = line.trim();
         if !line.starts_with("#define") {
             continue;
         }
-        
+
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 3 {
             continue;
         }
-        
+
         let name = parts[1];
-        
+
         if (name.starts_with("E_") || name.contains("_E_")) && !name.starts_with("ERROR_") {
             let value_part = parts[2..].join(" ");
             if let Some(hex_pos) = value_part.find("0x").or_else(|| value_part.find("0X")) {
                 let hex_rest = &value_part[hex_pos..];
-                let hex_end = hex_rest.find(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X')
+                let hex_end = hex_rest
+                    .find(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X')
                     .unwrap_or(hex_rest.len());
                 if let Some(code) = parse_hex(&hex_rest[..hex_end]) {
                     if code >= 0x80000000 {
@@ -294,7 +306,7 @@ fn extract_winerror_defines(content: &str) -> (Vec<(String, u32)>, Vec<(String, 
                 }
             }
         }
-        
+
         if name.starts_with("ERROR_") {
             let value_str = parts[2].trim_end_matches('L');
             if let Ok(code) = value_str.parse::<u32>() {
@@ -304,7 +316,7 @@ fn extract_winerror_defines(content: &str) -> (Vec<(String, u32)>, Vec<(String, 
             }
         }
     }
-    
+
     (hresults, win32_errors)
 }
 
@@ -366,7 +378,7 @@ fn extract_ntstatus(wine_path: &Path) -> io::Result<String> {
 
     let content = fs::read_to_string(&ntstatus_path)?;
     let defines = extract_ntstatus_defines(&content);
-    
+
     let mut codes: BTreeMap<u32, (String, String)> = BTreeMap::new();
     for (name, code) in defines {
         let description = status_to_description(&name);
@@ -404,7 +416,7 @@ fn extract_winerror(wine_path: &Path) -> io::Result<String> {
 
     let content = fs::read_to_string(&winerror_path)?;
     let (hresult_list, win32_list) = extract_winerror_defines(&content);
-    
+
     let mut hresults: BTreeMap<u32, (String, String)> = BTreeMap::new();
     let mut win32_errors: BTreeMap<u32, (String, String)> = BTreeMap::new();
 
@@ -422,7 +434,7 @@ fn extract_winerror(wine_path: &Path) -> io::Result<String> {
     eprintln!("Found {} Win32 error codes", win32_errors.len());
 
     let mut output = String::new();
-    
+
     output.push_str("/// HRESULT codes extracted from Wine winerror.h\n");
     output.push_str("pub const HRESULT_CODES: &[(u32, &str, &str)] = &[\n");
     for (code, (name, desc)) in hresults.iter().take(200) {
@@ -436,10 +448,7 @@ fn extract_winerror(wine_path: &Path) -> io::Result<String> {
     output.push_str("/// Win32 error codes extracted from Wine winerror.h\n");
     output.push_str("pub const WIN32_ERROR_CODES: &[(u32, &str, &str)] = &[\n");
     for (code, (name, desc)) in win32_errors.iter().take(500) {
-        output.push_str(&format!(
-            "    ({}, \"{}\", \"{}\"),\n",
-            code, name, desc
-        ));
+        output.push_str(&format!("    ({}, \"{}\", \"{}\"),\n", code, name, desc));
     }
     output.push_str("];\n");
 
@@ -449,7 +458,7 @@ fn extract_winerror(wine_path: &Path) -> io::Result<String> {
 /// Generate complete Rust module with all extracted data
 fn generate_all(wine_path: &Path) -> io::Result<String> {
     let mut output = String::new();
-    
+
     output.push_str("//! Wine debug information extracted from Wine source code\n");
     output.push_str("//! Auto-generated by wine-extract tool\n");
     output.push_str("//! Do not edit manually\n\n");
@@ -460,7 +469,8 @@ fn generate_all(wine_path: &Path) -> io::Result<String> {
     output.push_str("\n");
     output.push_str(&extract_winerror(wine_path)?);
 
-    output.push_str(r#"
+    output.push_str(
+        r#"
 /// Look up an NTSTATUS code by its hex value
 pub fn lookup_ntstatus(code: u32) -> Option<(&'static str, &'static str)> {
     NTSTATUS_CODES.iter()
@@ -486,7 +496,8 @@ pub fn lookup_win32_error(code: u32) -> Option<(&'static str, &'static str)> {
 pub fn is_valid_channel(channel: &str) -> bool {
     WINE_DEBUG_CHANNELS.contains(&channel)
 }
-"#);
+"#,
+    );
 
     output.push_str("\n");
     output.push_str(KNOWN_ERRORS_TEMPLATE);
@@ -535,8 +546,9 @@ fn generate_protontool(wine_path: &Path) -> io::Result<String> {
     eprintln!("Found {} unique debug channels", channels.len());
 
     let mut output = String::new();
-    
-    output.push_str(r#"//! Wine debug data extracted from Wine source code
+
+    output.push_str(
+        r#"//! Wine debug data extracted from Wine source code
 //! 
 //! This file is auto-generated by the wine-extract tool.
 //! Do not edit manually - regenerate with:
@@ -544,12 +556,13 @@ fn generate_protontool(wine_path: &Path) -> io::Result<String> {
 //!
 //! Source: Valve's Wine/Proton fork
 
-"#);
+"#,
+    );
 
     output.push_str("/// All Wine debug channels extracted from Wine source\n");
     output.push_str("/// Use with WINEDEBUG=+channel to enable tracing\n");
     output.push_str("pub const WINE_DEBUG_CHANNELS: &[&str] = &[\n");
-    
+
     let channels_vec: Vec<_> = channels.into_iter().collect();
     for chunk in channels_vec.chunks(8) {
         output.push_str("    ");
@@ -565,7 +578,8 @@ fn generate_protontool(wine_path: &Path) -> io::Result<String> {
 
     output.push_str(KNOWN_ERRORS_TEMPLATE);
 
-    output.push_str(r#"
+    output.push_str(
+        r#"
 /// Check if a string is a valid Wine debug channel
 pub fn is_valid_channel(channel: &str) -> bool {
     WINE_DEBUG_CHANNELS.contains(&channel)
@@ -578,7 +592,8 @@ pub fn lookup_error(pattern: &str) -> Option<(&'static str, &'static str)> {
         .find(|(p, _, _)| pattern_lower.contains(&p.to_lowercase()))
         .map(|(_, code, desc)| (*code, *desc))
 }
-"#);
+"#,
+    );
 
     Ok(output)
 }

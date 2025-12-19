@@ -1,3 +1,9 @@
+//! protontool-desktop-install - Install .desktop entries for protontool.
+//!
+//! Creates application shortcuts in ~/.local/share/applications/ for:
+//! - protontool: Main GUI for managing prefixes
+//! - protontool-launch: Quick launcher for .exe files
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -5,6 +11,8 @@ use std::process::{self, Command};
 
 use protontool::cli::util::ArgParser;
 
+/// Install .desktop files to ~/.local/share/applications/.
+/// Returns the installation directory path on success.
 fn install_desktop_entries() -> Result<PathBuf, String> {
     let home = env::var("HOME").map_err(|_| "HOME not set")?;
     let applications_dir = PathBuf::from(&home).join(".local/share/applications");
@@ -49,6 +57,7 @@ MimeType=application/x-ms-dos-executable;application/x-msdos-program;
     Ok(applications_dir)
 }
 
+/// Entry point - parse arguments and install desktop entries.
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
 

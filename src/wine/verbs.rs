@@ -1,9 +1,14 @@
+//! Verb system for installing Windows components, DLLs, fonts, and settings.
+//!
+//! Verbs are reusable installation recipes similar to winetricks.
+
 use std::collections::HashMap;
 use std::path::Path;
 
 use super::download::Downloader;
 use super::WineContext;
 
+/// Category of a verb for organization and filtering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerbCategory {
     App,
@@ -14,6 +19,7 @@ pub enum VerbCategory {
 }
 
 impl VerbCategory {
+    /// Get the display string for this category.
     pub fn as_str(&self) -> &'static str {
         match self {
             VerbCategory::App => "apps",
@@ -23,7 +29,8 @@ impl VerbCategory {
             VerbCategory::Custom => "custom",
         }
     }
-    
+
+    /// Get all available categories.
     pub fn all() -> &'static [VerbCategory] {
         &[
             VerbCategory::App,
@@ -35,6 +42,7 @@ impl VerbCategory {
     }
 }
 
+/// DLL override modes for WINEDLLOVERRIDES.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DllOverride {
     Native,
@@ -44,6 +52,7 @@ pub enum DllOverride {
 }
 
 impl DllOverride {
+    /// Get the Wine override string value.
     pub fn as_str(&self) -> &'static str {
         match self {
             DllOverride::Native => "native",
@@ -54,6 +63,7 @@ impl DllOverride {
     }
 }
 
+/// A file to download from a URL with optional checksum verification.
 #[derive(Debug, Clone)]
 pub struct DownloadFile {
     pub url: String,
@@ -62,6 +72,7 @@ pub struct DownloadFile {
 }
 
 impl DownloadFile {
+    /// Create a new download file specification.
     pub fn new(url: &str, filename: &str, sha256: Option<&str>) -> Self {
         Self {
             url: url.to_string(),
@@ -79,6 +90,7 @@ pub struct LocalFile {
 }
 
 impl LocalFile {
+    /// Create a new local file reference.
     pub fn new(path: &std::path::Path, name: &str) -> Self {
         Self {
             path: path.to_path_buf(),
@@ -87,24 +99,56 @@ impl LocalFile {
     }
 }
 
+/// Function signature for custom verb actions.
 pub type CustomAction = fn(&WineContext, &Downloader, &Path) -> Result<(), String>;
-pub type BoxedAction = Box<dyn Fn(&WineContext, &Downloader, &Path) -> Result<(), String> + Send + Sync>;
+/// Boxed custom action for dynamic dispatch.
+pub type BoxedAction =
+    Box<dyn Fn(&WineContext, &Downloader, &Path) -> Result<(), String> + Send + Sync>;
 
+/// An action that a verb can perform during execution.
 #[derive(Clone)]
 pub enum VerbAction {
-    RunInstaller { file: DownloadFile, args: Vec<String> },
-    RunLocalInstaller { file: LocalFile, args: Vec<String> },
-    RunScript { script_path: std::path::PathBuf },
-    Extract { file: DownloadFile, dest: String },
-    ExtractCab { file: DownloadFile, dest: String, filter: Option<String> },
-    Override { dll: String, mode: DllOverride },
-    Registry { content: String },
-    Winecfg { args: Vec<String> },
-    RegisterFont { filename: String, name: String },
-    CallVerb { name: String },
+    RunInstaller {
+        file: DownloadFile,
+        args: Vec<String>,
+    },
+    RunLocalInstaller {
+        file: LocalFile,
+        args: Vec<String>,
+    },
+    RunScript {
+        script_path: std::path::PathBuf,
+    },
+    Extract {
+        file: DownloadFile,
+        dest: String,
+    },
+    ExtractCab {
+        file: DownloadFile,
+        dest: String,
+        filter: Option<String>,
+    },
+    Override {
+        dll: String,
+        mode: DllOverride,
+    },
+    Registry {
+        content: String,
+    },
+    Winecfg {
+        args: Vec<String>,
+    },
+    RegisterFont {
+        filename: String,
+        name: String,
+    },
+    CallVerb {
+        name: String,
+    },
     Custom(CustomAction),
 }
 
+/// A verb definition with metadata and actions to execute.
 #[derive(Clone)]
 pub struct Verb {
     pub name: String,
@@ -116,7 +160,14 @@ pub struct Verb {
 }
 
 impl Verb {
-    pub fn new(name: &str, category: VerbCategory, title: &str, publisher: &str, year: &str) -> Self {
+    /// Create a new verb with metadata but no actions.
+    pub fn new(
+        name: &str,
+        category: VerbCategory,
+        title: &str,
+        publisher: &str,
+        year: &str,
+    ) -> Self {
         Self {
             name: name.to_string(),
             category,
@@ -127,11 +178,13 @@ impl Verb {
         }
     }
 
+    /// Add actions to this verb (builder pattern).
     pub fn with_actions(mut self, actions: Vec<VerbAction>) -> Self {
         self.actions = actions;
         self
     }
 
+    /// Execute all actions in this verb.
     pub fn execute(&self, wine_ctx: &WineContext, cache_dir: &Path) -> Result<(), String> {
         let downloader = Downloader::new(cache_dir);
         let tmp_dir = cache_dir.join("tmp");
@@ -144,7 +197,13 @@ impl Verb {
     }
 }
 
-fn execute_action(action: &VerbAction, wine_ctx: &WineContext, downloader: &Downloader, tmp_dir: &Path) -> Result<(), String> {
+/// Execute a single verb action.
+fn execute_action(
+    action: &VerbAction,
+    wine_ctx: &WineContext,
+    downloader: &Downloader,
+    tmp_dir: &Path,
+) -> Result<(), String> {
     match action {
         VerbAction::RunInstaller { file, args } => {
             let local = downloader.download(&file.url, &file.filename, file.sha256.as_deref())?;
@@ -177,12 +236,21 @@ fn execute_action(action: &VerbAction, wine_ctx: &WineContext, downloader: &Down
                 .env("PROTON_PATH", &wine_ctx.proton_path)
                 .env("W_TMP", tmp_dir)
                 .env("W_CACHE", downloader.cache_dir())
-                .env("W_SYSTEM32_DLLS", wine_ctx.prefix_path.join("drive_c/windows/syswow64"))
-                .env("W_SYSTEM64_DLLS", wine_ctx.prefix_path.join("drive_c/windows/system32"))
+                .env(
+                    "W_SYSTEM32_DLLS",
+                    wine_ctx.prefix_path.join("drive_c/windows/syswow64"),
+                )
+                .env(
+                    "W_SYSTEM64_DLLS",
+                    wine_ctx.prefix_path.join("drive_c/windows/system32"),
+                )
                 .status()
                 .map_err(|e| format!("Failed to run script: {}", e))?;
             if !status.success() {
-                return Err(format!("Script exited with code: {}", status.code().unwrap_or(-1)));
+                return Err(format!(
+                    "Script exited with code: {}",
+                    status.code().unwrap_or(-1)
+                ));
             }
         }
         VerbAction::Extract { file, dest } => {
@@ -193,7 +261,11 @@ fn execute_action(action: &VerbAction, wine_ctx: &WineContext, downloader: &Down
         }
         VerbAction::ExtractCab { file, dest, filter } => {
             let local = downloader.download(&file.url, &file.filename, file.sha256.as_deref())?;
-            let dest_path = if dest.is_empty() { tmp_dir.to_path_buf() } else { wine_ctx.prefix_path.join(dest) };
+            let dest_path = if dest.is_empty() {
+                tmp_dir.to_path_buf()
+            } else {
+                wine_ctx.prefix_path.join(dest)
+            };
             std::fs::create_dir_all(&dest_path).ok();
             super::util::extract_cab(&local, &dest_path, filter.as_deref())?;
         }
@@ -223,37 +295,48 @@ fn execute_action(action: &VerbAction, wine_ctx: &WineContext, downloader: &Down
             std::fs::remove_file(&reg_file).ok();
         }
         VerbAction::CallVerb { .. } => { /* Handled by VerbRegistry */ }
-        VerbAction::Custom(func) => { func(wine_ctx, downloader, tmp_dir)?; }
+        VerbAction::Custom(func) => {
+            func(wine_ctx, downloader, tmp_dir)?;
+        }
     }
     Ok(())
 }
 
+/// Registry of all available verbs (built-in and custom).
 pub struct VerbRegistry {
     verbs: HashMap<String, Verb>,
 }
 
 impl VerbRegistry {
+    /// Create a new registry with all built-in and custom verbs loaded.
     pub fn new() -> Self {
-        let mut registry = Self { verbs: HashMap::new() };
+        let mut registry = Self {
+            verbs: HashMap::new(),
+        };
         register_settings(&mut registry);
         register_fonts(&mut registry);
         register_dlls(&mut registry);
         register_apps(&mut registry);
-        
+
         // Load user-defined custom verbs
         for verb in super::custom::load_custom_verbs() {
             registry.register(verb);
         }
-        
+
         registry
     }
 
+    /// Register a verb in the registry.
     pub fn register(&mut self, verb: Verb) {
         self.verbs.insert(verb.name.clone(), verb);
     }
 
-    pub fn get(&self, name: &str) -> Option<&Verb> { self.verbs.get(name) }
+    /// Get a verb by name.
+    pub fn get(&self, name: &str) -> Option<&Verb> {
+        self.verbs.get(name)
+    }
 
+    /// List all verbs, optionally filtered by category.
     pub fn list(&self, category: Option<VerbCategory>) -> Vec<&Verb> {
         match category {
             Some(cat) => self.verbs.values().filter(|v| v.category == cat).collect(),
@@ -261,13 +344,25 @@ impl VerbRegistry {
         }
     }
 
+    /// Search verbs by name or title.
     pub fn search(&self, query: &str) -> Vec<&Verb> {
         let q = query.to_lowercase();
-        self.verbs.values().filter(|v| v.name.to_lowercase().contains(&q) || v.title.to_lowercase().contains(&q)).collect()
+        self.verbs
+            .values()
+            .filter(|v| v.name.to_lowercase().contains(&q) || v.title.to_lowercase().contains(&q))
+            .collect()
     }
 
-    pub fn execute(&self, name: &str, wine_ctx: &WineContext, cache_dir: &Path) -> Result<(), String> {
-        let verb = self.get(name).ok_or_else(|| format!("Unknown verb: {}", name))?;
+    /// Execute a verb by name, resolving CallVerb dependencies first.
+    pub fn execute(
+        &self,
+        name: &str,
+        wine_ctx: &WineContext,
+        cache_dir: &Path,
+    ) -> Result<(), String> {
+        let verb = self
+            .get(name)
+            .ok_or_else(|| format!("Unknown verb: {}", name))?;
         for action in &verb.actions {
             if let VerbAction::CallVerb { name: dep_name } = action {
                 self.execute(dep_name, wine_ctx, cache_dir)?;
@@ -278,25 +373,78 @@ impl VerbRegistry {
 }
 
 impl Default for VerbRegistry {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ============================================================================
 // SETTINGS VERBS
 // ============================================================================
 
+/// Register built-in settings verbs (Windows version, graphics, sound, etc.).
 fn register_settings(registry: &mut VerbRegistry) {
     // Windows versions (Win7+)
-    registry.register(Verb::new("win7", VerbCategory::Setting, "Set Windows version to Windows 7", "Microsoft", "2009")
-        .with_actions(vec![VerbAction::Winecfg { args: vec!["-v".into(), "win7".into()] }]));
-    registry.register(Verb::new("win8", VerbCategory::Setting, "Set Windows version to Windows 8", "Microsoft", "2012")
-        .with_actions(vec![VerbAction::Winecfg { args: vec!["-v".into(), "win8".into()] }]));
-    registry.register(Verb::new("win81", VerbCategory::Setting, "Set Windows version to Windows 8.1", "Microsoft", "2013")
-        .with_actions(vec![VerbAction::Winecfg { args: vec!["-v".into(), "win81".into()] }]));
-    registry.register(Verb::new("win10", VerbCategory::Setting, "Set Windows version to Windows 10", "Microsoft", "2015")
-        .with_actions(vec![VerbAction::Winecfg { args: vec!["-v".into(), "win10".into()] }]));
-    registry.register(Verb::new("win11", VerbCategory::Setting, "Set Windows version to Windows 11", "Microsoft", "2021")
-        .with_actions(vec![VerbAction::Winecfg { args: vec!["-v".into(), "win11".into()] }]));
+    registry.register(
+        Verb::new(
+            "win7",
+            VerbCategory::Setting,
+            "Set Windows version to Windows 7",
+            "Microsoft",
+            "2009",
+        )
+        .with_actions(vec![VerbAction::Winecfg {
+            args: vec!["-v".into(), "win7".into()],
+        }]),
+    );
+    registry.register(
+        Verb::new(
+            "win8",
+            VerbCategory::Setting,
+            "Set Windows version to Windows 8",
+            "Microsoft",
+            "2012",
+        )
+        .with_actions(vec![VerbAction::Winecfg {
+            args: vec!["-v".into(), "win8".into()],
+        }]),
+    );
+    registry.register(
+        Verb::new(
+            "win81",
+            VerbCategory::Setting,
+            "Set Windows version to Windows 8.1",
+            "Microsoft",
+            "2013",
+        )
+        .with_actions(vec![VerbAction::Winecfg {
+            args: vec!["-v".into(), "win81".into()],
+        }]),
+    );
+    registry.register(
+        Verb::new(
+            "win10",
+            VerbCategory::Setting,
+            "Set Windows version to Windows 10",
+            "Microsoft",
+            "2015",
+        )
+        .with_actions(vec![VerbAction::Winecfg {
+            args: vec!["-v".into(), "win10".into()],
+        }]),
+    );
+    registry.register(
+        Verb::new(
+            "win11",
+            VerbCategory::Setting,
+            "Set Windows version to Windows 11",
+            "Microsoft",
+            "2021",
+        )
+        .with_actions(vec![VerbAction::Winecfg {
+            args: vec!["-v".into(), "win11".into()],
+        }]),
+    );
 
     // Graphics
     registry.register(Verb::new("graphics=x11", VerbCategory::Setting, "Set graphics driver to X11", "Wine", "")
@@ -323,7 +471,13 @@ fn register_settings(registry: &mut VerbRegistry) {
     // Virtual desktop
     registry.register(Verb::new("vd=off", VerbCategory::Setting, "Disable virtual desktop", "Wine", "")
         .with_actions(vec![VerbAction::Registry { content: "Windows Registry Editor Version 5.00\n\n[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n\"Desktop\"=-\n[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]\n\"Default\"=-\n".into() }]));
-    for (name, size) in [("vd=640x480", "640x480"), ("vd=800x600", "800x600"), ("vd=1024x768", "1024x768"), ("vd=1280x1024", "1280x1024"), ("vd=1440x900", "1440x900")] {
+    for (name, size) in [
+        ("vd=640x480", "640x480"),
+        ("vd=800x600", "800x600"),
+        ("vd=1024x768", "1024x768"),
+        ("vd=1280x1024", "1280x1024"),
+        ("vd=1440x900", "1440x900"),
+    ] {
         registry.register(Verb::new(name, VerbCategory::Setting, &format!("Enable virtual desktop {}", size), "Wine", "")
             .with_actions(vec![VerbAction::Registry { content: format!("Windows Registry Editor Version 5.00\n\n[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n\"Desktop\"=\"Default\"\n[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]\n\"Default\"=\"{}\"\n", size) }]));
     }
@@ -369,12 +523,26 @@ fn register_settings(registry: &mut VerbRegistry) {
     }
 
     // Sandbox
-    registry.register(Verb::new("isolate_home", VerbCategory::Setting, "Remove links to $HOME", "Wine", "")
+    registry.register(
+        Verb::new(
+            "isolate_home",
+            VerbCategory::Setting,
+            "Remove links to $HOME",
+            "Wine",
+            "",
+        )
         .with_actions(vec![VerbAction::Custom(|wine_ctx, _, _| {
             let users = wine_ctx.prefix_path.join("drive_c/users");
             if let Ok(entries) = std::fs::read_dir(&users) {
                 for entry in entries.flatten() {
-                    for subdir in ["My Documents", "Desktop", "Downloads", "My Music", "My Pictures", "My Videos"] {
+                    for subdir in [
+                        "My Documents",
+                        "Desktop",
+                        "Downloads",
+                        "My Music",
+                        "My Pictures",
+                        "My Videos",
+                    ] {
                         let link = entry.path().join(subdir);
                         if link.is_symlink() {
                             std::fs::remove_file(&link).ok();
@@ -384,107 +552,411 @@ fn register_settings(registry: &mut VerbRegistry) {
                 }
             }
             Ok(())
-        })]));
+        })]),
+    );
 }
 
 // ============================================================================
 // FONT VERBS
 // ============================================================================
 
+/// Register built-in font verbs (corefonts, tahoma, etc.).
 fn register_fonts(registry: &mut VerbRegistry) {
-    registry.register(Verb::new("corefonts", VerbCategory::Font, "MS Core Fonts", "Microsoft", "2008")
+    registry.register(
+        Verb::new(
+            "corefonts",
+            VerbCategory::Font,
+            "MS Core Fonts",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::CallVerb { name: "andale".into() },
-            VerbAction::CallVerb { name: "arial".into() },
-            VerbAction::CallVerb { name: "comicsans".into() },
-            VerbAction::CallVerb { name: "courier".into() },
-            VerbAction::CallVerb { name: "georgia".into() },
-            VerbAction::CallVerb { name: "impact".into() },
-            VerbAction::CallVerb { name: "times".into() },
-            VerbAction::CallVerb { name: "trebuchet".into() },
-            VerbAction::CallVerb { name: "verdana".into() },
-            VerbAction::CallVerb { name: "webdings".into() },
-        ]));
+            VerbAction::CallVerb {
+                name: "andale".into(),
+            },
+            VerbAction::CallVerb {
+                name: "arial".into(),
+            },
+            VerbAction::CallVerb {
+                name: "comicsans".into(),
+            },
+            VerbAction::CallVerb {
+                name: "courier".into(),
+            },
+            VerbAction::CallVerb {
+                name: "georgia".into(),
+            },
+            VerbAction::CallVerb {
+                name: "impact".into(),
+            },
+            VerbAction::CallVerb {
+                name: "times".into(),
+            },
+            VerbAction::CallVerb {
+                name: "trebuchet".into(),
+            },
+            VerbAction::CallVerb {
+                name: "verdana".into(),
+            },
+            VerbAction::CallVerb {
+                name: "webdings".into(),
+            },
+        ]),
+    );
 
-    registry.register(Verb::new("andale", VerbCategory::Font, "MS Andale Mono", "Microsoft", "2008")
+    registry.register(
+        Verb::new(
+            "andale",
+            VerbCategory::Font,
+            "MS Andale Mono",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/andale32.exe", "andale32.exe", Some("0524fe42951adc3a7eb870e32f0920313c71f170c859b5f770d82b4ee111e970")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "andalemo.ttf".into(), name: "Andale Mono".into() },
-        ]));
-    registry.register(Verb::new("arial", VerbCategory::Font, "MS Arial", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/andale32.exe",
+                    "andale32.exe",
+                    Some("0524fe42951adc3a7eb870e32f0920313c71f170c859b5f770d82b4ee111e970"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "andalemo.ttf".into(),
+                name: "Andale Mono".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new("arial", VerbCategory::Font, "MS Arial", "Microsoft", "2008").with_actions(vec![
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/arial32.exe",
+                    "arial32.exe",
+                    Some("85297a4d146e9c87ac6f74822734bdee5f4b2a722d7eaa584b7f2cbf76f478f6"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "arial.ttf".into(),
+                name: "Arial".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "comicsans",
+            VerbCategory::Font,
+            "MS Comic Sans",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/arial32.exe", "arial32.exe", Some("85297a4d146e9c87ac6f74822734bdee5f4b2a722d7eaa584b7f2cbf76f478f6")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "arial.ttf".into(), name: "Arial".into() },
-        ]));
-    registry.register(Verb::new("comicsans", VerbCategory::Font, "MS Comic Sans", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/comic32.exe",
+                    "comic32.exe",
+                    Some("9c6df3feefde26d4e41d4a4fe5db2a89f9123a772594d7f59afd062625cd204e"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "comic.ttf".into(),
+                name: "Comic Sans MS".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "courier",
+            VerbCategory::Font,
+            "MS Courier New",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/comic32.exe", "comic32.exe", Some("9c6df3feefde26d4e41d4a4fe5db2a89f9123a772594d7f59afd062625cd204e")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "comic.ttf".into(), name: "Comic Sans MS".into() },
-        ]));
-    registry.register(Verb::new("courier", VerbCategory::Font, "MS Courier New", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/courie32.exe",
+                    "courie32.exe",
+                    Some("bb511d861655dde879ae552eb86b134d6fae67cb58502e6ff73ec5d9151f3384"),
+                ),
+                dest: "".into(),
+                filter: Some("*.ttf".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "cour.ttf".into(),
+                name: "Courier New".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "georgia",
+            VerbCategory::Font,
+            "MS Georgia",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/courie32.exe", "courie32.exe", Some("bb511d861655dde879ae552eb86b134d6fae67cb58502e6ff73ec5d9151f3384")), dest: "".into(), filter: Some("*.ttf".into()) },
-            VerbAction::RegisterFont { filename: "cour.ttf".into(), name: "Courier New".into() },
-        ]));
-    registry.register(Verb::new("georgia", VerbCategory::Font, "MS Georgia", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/georgi32.exe",
+                    "georgi32.exe",
+                    Some("2c2c7dcda6606ea5cf08918fb7cd3f3359e9e84338dc690013f20cd42e930301"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "georgia.ttf".into(),
+                name: "Georgia".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "impact",
+            VerbCategory::Font,
+            "MS Impact",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/georgi32.exe", "georgi32.exe", Some("2c2c7dcda6606ea5cf08918fb7cd3f3359e9e84338dc690013f20cd42e930301")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "georgia.ttf".into(), name: "Georgia".into() },
-        ]));
-    registry.register(Verb::new("impact", VerbCategory::Font, "MS Impact", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/impact32.exe",
+                    "impact32.exe",
+                    Some("6061ef3b7401d9642f5dfdb5f2b376aa14663f6275e60a51207ad4facf2fccfb"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "impact.ttf".into(),
+                name: "Impact".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "times",
+            VerbCategory::Font,
+            "MS Times New Roman",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/impact32.exe", "impact32.exe", Some("6061ef3b7401d9642f5dfdb5f2b376aa14663f6275e60a51207ad4facf2fccfb")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "impact.ttf".into(), name: "Impact".into() },
-        ]));
-    registry.register(Verb::new("times", VerbCategory::Font, "MS Times New Roman", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/times32.exe",
+                    "times32.exe",
+                    Some("db56595ec6ef5d3de5c24994f001f03b2a13e37cee27bc25c58f6f43e8f807ab"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "times.ttf".into(),
+                name: "Times New Roman".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "trebuchet",
+            VerbCategory::Font,
+            "MS Trebuchet",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/times32.exe", "times32.exe", Some("db56595ec6ef5d3de5c24994f001f03b2a13e37cee27bc25c58f6f43e8f807ab")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "times.ttf".into(), name: "Times New Roman".into() },
-        ]));
-    registry.register(Verb::new("trebuchet", VerbCategory::Font, "MS Trebuchet", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/trebuc32.exe",
+                    "trebuc32.exe",
+                    Some("5a690d9bb8510be1b8b4c025b7f34b90e9e2c881c05c8b8a5a3052525b8a4c5a"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "trebuc.ttf".into(),
+                name: "Trebuchet MS".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "verdana",
+            VerbCategory::Font,
+            "MS Verdana",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/trebuc32.exe", "trebuc32.exe", Some("5a690d9bb8510be1b8b4c025b7f34b90e9e2c881c05c8b8a5a3052525b8a4c5a")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "trebuc.ttf".into(), name: "Trebuchet MS".into() },
-        ]));
-    registry.register(Verb::new("verdana", VerbCategory::Font, "MS Verdana", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/verdan32.exe",
+                    "verdan32.exe",
+                    Some("c1cb61255e363166794e47664e2f21af8e3a26cb6346eb8d2ae2fa85dd5aad96"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "verdana.ttf".into(),
+                name: "Verdana".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "webdings",
+            VerbCategory::Font,
+            "MS Webdings",
+            "Microsoft",
+            "2008",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/verdan32.exe", "verdan32.exe", Some("c1cb61255e363166794e47664e2f21af8e3a26cb6346eb8d2ae2fa85dd5aad96")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "verdana.ttf".into(), name: "Verdana".into() },
-        ]));
-    registry.register(Verb::new("webdings", VerbCategory::Font, "MS Webdings", "Microsoft", "2008")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://github.com/pushcx/corefonts/raw/master/webdin32.exe",
+                    "webdin32.exe",
+                    Some("64595b5abc1080fba8610c5c34fab5863408e806aafe84653ca8575f82ca9ab6"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "webdings.ttf".into(),
+                name: "Webdings".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "tahoma",
+            VerbCategory::Font,
+            "MS Tahoma",
+            "Microsoft",
+            "1999",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://github.com/pushcx/corefonts/raw/master/webdin32.exe", "webdin32.exe", Some("64595b5abc1080fba8610c5c34fab5863408e806aafe84653ca8575f82ca9ab6")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "webdings.ttf".into(), name: "Webdings".into() },
-        ]));
-    registry.register(Verb::new("tahoma", VerbCategory::Font, "MS Tahoma", "Microsoft", "1999")
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://downloads.sourceforge.net/corefonts/OldFiles/IELPKTH.CAB",
+                    "IELPKTH.CAB",
+                    Some("c1be3fb8f0042570be76ec6daa03a99142c88367c1bc810240b85827c715961a"),
+                ),
+                dest: "".into(),
+                filter: Some("*.TTF".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "tahoma.ttf".into(),
+                name: "Tahoma".into(),
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "lucida",
+            VerbCategory::Font,
+            "MS Lucida Console",
+            "Microsoft",
+            "1998",
+        )
         .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://downloads.sourceforge.net/corefonts/OldFiles/IELPKTH.CAB", "IELPKTH.CAB", Some("c1be3fb8f0042570be76ec6daa03a99142c88367c1bc810240b85827c715961a")), dest: "".into(), filter: Some("*.TTF".into()) },
-            VerbAction::RegisterFont { filename: "tahoma.ttf".into(), name: "Tahoma".into() },
-        ]));
-    registry.register(Verb::new("lucida", VerbCategory::Font, "MS Lucida Console", "Microsoft", "1998")
-        .with_actions(vec![
-            VerbAction::ExtractCab { file: DownloadFile::new("https://downloads.sourceforge.net/corefonts/OldFiles/IELPKTH.CAB", "IELPKTH.CAB", Some("c1be3fb8f0042570be76ec6daa03a99142c88367c1bc810240b85827c715961a")), dest: "".into(), filter: Some("lucon.ttf".into()) },
-            VerbAction::RegisterFont { filename: "lucon.ttf".into(), name: "Lucida Console".into() },
-        ]));
+            VerbAction::ExtractCab {
+                file: DownloadFile::new(
+                    "https://downloads.sourceforge.net/corefonts/OldFiles/IELPKTH.CAB",
+                    "IELPKTH.CAB",
+                    Some("c1be3fb8f0042570be76ec6daa03a99142c88367c1bc810240b85827c715961a"),
+                ),
+                dest: "".into(),
+                filter: Some("lucon.ttf".into()),
+            },
+            VerbAction::RegisterFont {
+                filename: "lucon.ttf".into(),
+                name: "Lucida Console".into(),
+            },
+        ]),
+    );
 }
 
 // ============================================================================
 // DLL VERBS
 // ============================================================================
 
+/// Register built-in DLL verbs (vcrun, dotnet, dxvk, etc.).
 fn register_dlls(registry: &mut VerbRegistry) {
     // Visual C++ Runtimes
-    registry.register(Verb::new("vcrun2022", VerbCategory::Dll, "Visual C++ 2015-2022 Runtime", "Microsoft", "2022")
+    registry.register(
+        Verb::new(
+            "vcrun2022",
+            VerbCategory::Dll,
+            "Visual C++ 2015-2022 Runtime",
+            "Microsoft",
+            "2022",
+        )
         .with_actions(vec![
-            VerbAction::RunInstaller { file: DownloadFile::new("https://aka.ms/vs/17/release/vc_redist.x86.exe", "vc_redist.x86.exe", None), args: vec!["/install".into(), "/quiet".into(), "/norestart".into()] },
-            VerbAction::RunInstaller { file: DownloadFile::new("https://aka.ms/vs/17/release/vc_redist.x64.exe", "vc_redist.x64.exe", None), args: vec!["/install".into(), "/quiet".into(), "/norestart".into()] },
-        ]));
-    registry.register(Verb::new("vcrun2019", VerbCategory::Dll, "Visual C++ 2015-2019 Runtime", "Microsoft", "2019")
-        .with_actions(vec![VerbAction::CallVerb { name: "vcrun2022".into() }]));
-    registry.register(Verb::new("vcrun2017", VerbCategory::Dll, "Visual C++ 2017 Runtime", "Microsoft", "2017")
-        .with_actions(vec![VerbAction::CallVerb { name: "vcrun2022".into() }]));
-    registry.register(Verb::new("vcrun2015", VerbCategory::Dll, "Visual C++ 2015 Runtime", "Microsoft", "2015")
-        .with_actions(vec![VerbAction::CallVerb { name: "vcrun2022".into() }]));
+            VerbAction::RunInstaller {
+                file: DownloadFile::new(
+                    "https://aka.ms/vs/17/release/vc_redist.x86.exe",
+                    "vc_redist.x86.exe",
+                    None,
+                ),
+                args: vec!["/install".into(), "/quiet".into(), "/norestart".into()],
+            },
+            VerbAction::RunInstaller {
+                file: DownloadFile::new(
+                    "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+                    "vc_redist.x64.exe",
+                    None,
+                ),
+                args: vec!["/install".into(), "/quiet".into(), "/norestart".into()],
+            },
+        ]),
+    );
+    registry.register(
+        Verb::new(
+            "vcrun2019",
+            VerbCategory::Dll,
+            "Visual C++ 2015-2019 Runtime",
+            "Microsoft",
+            "2019",
+        )
+        .with_actions(vec![VerbAction::CallVerb {
+            name: "vcrun2022".into(),
+        }]),
+    );
+    registry.register(
+        Verb::new(
+            "vcrun2017",
+            VerbCategory::Dll,
+            "Visual C++ 2017 Runtime",
+            "Microsoft",
+            "2017",
+        )
+        .with_actions(vec![VerbAction::CallVerb {
+            name: "vcrun2022".into(),
+        }]),
+    );
+    registry.register(
+        Verb::new(
+            "vcrun2015",
+            VerbCategory::Dll,
+            "Visual C++ 2015 Runtime",
+            "Microsoft",
+            "2015",
+        )
+        .with_actions(vec![VerbAction::CallVerb {
+            name: "vcrun2022".into(),
+        }]),
+    );
 
     // .NET Framework
     registry.register(Verb::new("dotnet48", VerbCategory::Dll, "MS .NET 4.8", "Microsoft", "2019")
@@ -504,9 +976,20 @@ fn register_dlls(registry: &mut VerbRegistry) {
         }]));
 
     // DXVK
-    registry.register(Verb::new("dxvk", VerbCategory::Dll, "DXVK (latest)", "Philip Rebohle", "2024")
+    registry.register(
+        Verb::new(
+            "dxvk",
+            VerbCategory::Dll,
+            "DXVK (latest)",
+            "Philip Rebohle",
+            "2024",
+        )
         .with_actions(vec![VerbAction::Custom(|wine_ctx, downloader, tmp_dir| {
-            let file = downloader.download("https://github.com/doitsujin/dxvk/releases/download/v2.5.3/dxvk-2.5.3.tar.gz", "dxvk-2.5.3.tar.gz", None)?;
+            let file = downloader.download(
+                "https://github.com/doitsujin/dxvk/releases/download/v2.5.3/dxvk-2.5.3.tar.gz",
+                "dxvk-2.5.3.tar.gz",
+                None,
+            )?;
             crate::wine::util::extract_archive(&file, tmp_dir)?;
             let dxvk = tmp_dir.join("dxvk-2.5.3");
             let sys32 = wine_ctx.prefix_path.join("drive_c/windows/system32");
@@ -520,9 +1003,12 @@ fn register_dlls(registry: &mut VerbRegistry) {
                 }
             }
             let mut ctx = wine_ctx.clone();
-            for dll in ["d3d9", "d3d10core", "d3d11", "dxgi"] { ctx.set_dll_override(dll, "native"); }
+            for dll in ["d3d9", "d3d10core", "d3d11", "dxgi"] {
+                ctx.set_dll_override(dll, "native");
+            }
             Ok(())
-        })]));
+        })]),
+    );
 
     // PhysX
     registry.register(Verb::new("physx", VerbCategory::Dll, "PhysX", "Nvidia", "2021")
@@ -539,11 +1025,23 @@ fn register_dlls(registry: &mut VerbRegistry) {
         }]));
 
     // OpenAL
-    registry.register(Verb::new("openal", VerbCategory::Dll, "OpenAL Runtime", "Creative", "2023")
+    registry.register(
+        Verb::new(
+            "openal",
+            VerbCategory::Dll,
+            "OpenAL Runtime",
+            "Creative",
+            "2023",
+        )
         .with_actions(vec![VerbAction::RunInstaller {
-            file: DownloadFile::new("https://www.openal.org/downloads/oalinst.zip", "oalinst.zip", None),
+            file: DownloadFile::new(
+                "https://www.openal.org/downloads/oalinst.zip",
+                "oalinst.zip",
+                None,
+            ),
             args: vec!["/s".into()],
-        }]));
+        }]),
+    );
 
     // Older Visual C++ Runtimes
     registry.register(Verb::new("vcrun2013", VerbCategory::Dll, "Visual C++ 2013 Runtime", "Microsoft", "2013")
@@ -748,7 +1246,14 @@ fn register_dlls(registry: &mut VerbRegistry) {
         }]));
 
     // Media Foundation
-    registry.register(Verb::new("mf", VerbCategory::Dll, "MS Media Foundation", "Microsoft", "2011")
+    registry.register(
+        Verb::new(
+            "mf",
+            VerbCategory::Dll,
+            "MS Media Foundation",
+            "Microsoft",
+            "2011",
+        )
         .with_actions(vec![VerbAction::Custom(|wine_ctx, _, _| {
             // Enable Media Foundation DLLs via registry
             let reg_content = r#"Windows Registry Editor Version 5.00
@@ -762,16 +1267,25 @@ fn register_dlls(registry: &mut VerbRegistry) {
             wine_ctx.run_regedit(&reg_file).ok();
             std::fs::remove_file(&reg_file).ok();
             Ok(())
-        })]));
+        })]),
+    );
 
     // quartz (DirectShow)
-    registry.register(Verb::new("quartz", VerbCategory::Dll, "MS quartz.dll (DirectShow)", "Microsoft", "2011")
+    registry.register(
+        Verb::new(
+            "quartz",
+            VerbCategory::Dll,
+            "MS quartz.dll (DirectShow)",
+            "Microsoft",
+            "2011",
+        )
         .with_actions(vec![VerbAction::Custom(|wine_ctx, _, _| {
             // Just set native override - Wine has a builtin
             let mut ctx = wine_ctx.clone();
             ctx.set_dll_override("quartz", "native,builtin");
             Ok(())
-        })]));
+        })]),
+    );
 
     // Visual Basic 6 Runtime
     registry.register(Verb::new("vb6run", VerbCategory::Dll, "MS Visual Basic 6 Runtime", "Microsoft", "2004")
@@ -788,7 +1302,13 @@ fn register_dlls(registry: &mut VerbRegistry) {
         }]));
 
     // DXVK versioned - helper function
-    fn install_dxvk(wine_ctx: &crate::wine::WineContext, downloader: &crate::wine::download::Downloader, tmp_dir: &std::path::Path, version: &str, url: &str) -> Result<(), String> {
+    fn install_dxvk(
+        wine_ctx: &crate::wine::WineContext,
+        downloader: &crate::wine::download::Downloader,
+        tmp_dir: &std::path::Path,
+        version: &str,
+        url: &str,
+    ) -> Result<(), String> {
         let filename = format!("dxvk-{}.tar.gz", version);
         let file = downloader.download(url, &filename, None)?;
         crate::wine::util::extract_archive(&file, tmp_dir)?;
@@ -806,18 +1326,60 @@ fn register_dlls(registry: &mut VerbRegistry) {
         Ok(())
     }
 
-    registry.register(Verb::new("dxvk2060", VerbCategory::Dll, "DXVK 2.6", "Philip Rebohle", "2024")
+    registry.register(
+        Verb::new(
+            "dxvk2060",
+            VerbCategory::Dll,
+            "DXVK 2.6",
+            "Philip Rebohle",
+            "2024",
+        )
         .with_actions(vec![VerbAction::Custom(|wine_ctx, downloader, tmp_dir| {
-            install_dxvk(wine_ctx, downloader, tmp_dir, "2.6", "https://github.com/doitsujin/dxvk/releases/download/v2.6/dxvk-2.6.tar.gz")
-        })]));
-    registry.register(Verb::new("dxvk2050", VerbCategory::Dll, "DXVK 2.5", "Philip Rebohle", "2024")
+            install_dxvk(
+                wine_ctx,
+                downloader,
+                tmp_dir,
+                "2.6",
+                "https://github.com/doitsujin/dxvk/releases/download/v2.6/dxvk-2.6.tar.gz",
+            )
+        })]),
+    );
+    registry.register(
+        Verb::new(
+            "dxvk2050",
+            VerbCategory::Dll,
+            "DXVK 2.5",
+            "Philip Rebohle",
+            "2024",
+        )
         .with_actions(vec![VerbAction::Custom(|wine_ctx, downloader, tmp_dir| {
-            install_dxvk(wine_ctx, downloader, tmp_dir, "2.5", "https://github.com/doitsujin/dxvk/releases/download/v2.5/dxvk-2.5.tar.gz")
-        })]));
-    registry.register(Verb::new("dxvk2040", VerbCategory::Dll, "DXVK 2.4", "Philip Rebohle", "2024")
+            install_dxvk(
+                wine_ctx,
+                downloader,
+                tmp_dir,
+                "2.5",
+                "https://github.com/doitsujin/dxvk/releases/download/v2.5/dxvk-2.5.tar.gz",
+            )
+        })]),
+    );
+    registry.register(
+        Verb::new(
+            "dxvk2040",
+            VerbCategory::Dll,
+            "DXVK 2.4",
+            "Philip Rebohle",
+            "2024",
+        )
         .with_actions(vec![VerbAction::Custom(|wine_ctx, downloader, tmp_dir| {
-            install_dxvk(wine_ctx, downloader, tmp_dir, "2.4", "https://github.com/doitsujin/dxvk/releases/download/v2.4/dxvk-2.4.tar.gz")
-        })]));
+            install_dxvk(
+                wine_ctx,
+                downloader,
+                tmp_dir,
+                "2.4",
+                "https://github.com/doitsujin/dxvk/releases/download/v2.4/dxvk-2.4.tar.gz",
+            )
+        })]),
+    );
 }
 
 // ============================================================================
@@ -825,24 +1387,50 @@ fn register_dlls(registry: &mut VerbRegistry) {
 // ============================================================================
 
 fn register_apps(registry: &mut VerbRegistry) {
-    registry.register(Verb::new("7zip", VerbCategory::App, "7-Zip", "Igor Pavlov", "2024")
-        .with_actions(vec![VerbAction::RunInstaller {
-            file: DownloadFile::new("https://www.7-zip.org/a/7z2409-x64.exe", "7z2409-x64.exe", None),
-            args: vec!["/S".into()],
-        }]));
+    registry.register(
+        Verb::new("7zip", VerbCategory::App, "7-Zip", "Igor Pavlov", "2024").with_actions(vec![
+            VerbAction::RunInstaller {
+                file: DownloadFile::new(
+                    "https://www.7-zip.org/a/7z2409-x64.exe",
+                    "7z2409-x64.exe",
+                    None,
+                ),
+                args: vec!["/S".into()],
+            },
+        ]),
+    );
     registry.register(Verb::new("notepadplusplus", VerbCategory::App, "Notepad++", "Don Ho", "2024")
         .with_actions(vec![VerbAction::RunInstaller {
             file: DownloadFile::new("https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.7.1/npp.8.7.1.Installer.x64.exe", "npp.8.7.1.Installer.x64.exe", None),
             args: vec!["/S".into()],
         }]));
-    registry.register(Verb::new("vlc", VerbCategory::App, "VLC media player", "VideoLAN", "2015")
+    registry.register(
+        Verb::new(
+            "vlc",
+            VerbCategory::App,
+            "VLC media player",
+            "VideoLAN",
+            "2015",
+        )
         .with_actions(vec![VerbAction::RunInstaller {
-            file: DownloadFile::new("https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe", "vlc-3.0.21-win64.exe", None),
+            file: DownloadFile::new(
+                "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe",
+                "vlc-3.0.21-win64.exe",
+                None,
+            ),
             args: vec!["/S".into()],
-        }]));
-    registry.register(Verb::new("winrar", VerbCategory::App, "WinRAR", "RARLAB", "1993")
-        .with_actions(vec![VerbAction::RunInstaller {
-            file: DownloadFile::new("https://www.rarlab.com/rar/winrar-x64-701.exe", "winrar-x64-701.exe", None),
-            args: vec!["/s".into()],
-        }]));
+        }]),
+    );
+    registry.register(
+        Verb::new("winrar", VerbCategory::App, "WinRAR", "RARLAB", "1993").with_actions(vec![
+            VerbAction::RunInstaller {
+                file: DownloadFile::new(
+                    "https://www.rarlab.com/rar/winrar-x64-701.exe",
+                    "winrar-x64-701.exe",
+                    None,
+                ),
+                args: vec!["/s".into()],
+            },
+        ]),
+    );
 }

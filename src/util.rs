@@ -1,8 +1,8 @@
 use std::env;
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::os::unix::fs::symlink;
 
 /// Extract stdout from a command output as a trimmed string
 pub fn output_to_string(output: &Output) -> String {
@@ -14,6 +14,8 @@ pub fn output_stderr_to_string(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).trim().to_string()
 }
 
+/// Search PATH for an executable by name.
+/// Returns the full path to the first matching executable found, or None.
 pub fn which(name: &str) -> Option<std::path::PathBuf> {
     env::var_os("PATH").and_then(|paths| {
         env::split_paths(&paths).find_map(|dir| {
@@ -27,6 +29,7 @@ pub fn which(name: &str) -> Option<std::path::PathBuf> {
     })
 }
 
+/// Check if a file has executable permissions (unix only).
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -38,12 +41,25 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+/// Quote a string for safe use in shell commands.
+/// Returns the string unchanged if it contains only safe characters,
+/// otherwise wraps it in single quotes with proper escaping.
+///
+/// ```
+/// use protontool::util::shell_quote;
+/// assert_eq!(shell_quote("simple"), "simple");
+/// assert_eq!(shell_quote("has space"), "'has space'");
+/// assert_eq!(shell_quote("it's"), "'it'\\''s'");
+/// assert_eq!(shell_quote(""), "''");
+/// ```
 pub fn shell_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
     }
 
-    if s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/') {
+    if s.chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/')
+    {
         return s.to_string();
     }
 
@@ -60,13 +76,15 @@ pub fn shell_quote(s: &str) -> String {
     quoted
 }
 
-/// Recursively walk directory and collect files with given extension
+/// Recursively walk a directory and collect all files with the given extension.
+/// Skips symlinks to avoid infinite loops. Extension should not include the dot.
 pub fn walk_dir_files_with_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
     let mut files = Vec::new();
     walk_dir_files_with_ext_recursive(dir, ext, &mut files);
     files
 }
 
+/// Internal recursive helper for walk_dir_files_with_ext.
 fn walk_dir_files_with_ext_recursive(dir: &Path, ext: &str, files: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -89,7 +107,16 @@ fn walk_dir_files_with_ext_recursive(dir: &Path, ext: &str, files: &mut Vec<Path
     }
 }
 
-/// Parse hex value from string like "0x12345678" or "0X12345678"
+/// Parse a hexadecimal string prefixed with "0x" or "0X" into a u32.
+/// Returns None if the string is not a valid hex number or lacks the prefix.
+///
+/// ```
+/// use protontool::util::parse_hex;
+/// assert_eq!(parse_hex("0x1234"), Some(0x1234));
+/// assert_eq!(parse_hex("0XABCD"), Some(0xABCD));
+/// assert_eq!(parse_hex("1234"), None);
+/// assert_eq!(parse_hex("invalid"), None);
+/// ```
 pub fn parse_hex(s: &str) -> Option<u32> {
     let s = s.trim();
     if s.len() > 2 && (s.starts_with("0x") || s.starts_with("0X")) {
@@ -99,35 +126,41 @@ pub fn parse_hex(s: &str) -> Option<u32> {
     }
 }
 
-/// Calculate relative path from base directory to target
+/// Calculate a relative path from one directory to another.
+/// Both paths are canonicalized before computation.
+/// Returns None if either path cannot be canonicalized.
 pub fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
     let from = from.canonicalize().ok()?;
     let to = to.canonicalize().ok()?;
-    
+
     let from_parts: Vec<_> = from.components().collect();
     let to_parts: Vec<_> = to.components().collect();
-    
+
     // Find common prefix length
-    let common_len = from_parts.iter()
+    let common_len = from_parts
+        .iter()
         .zip(to_parts.iter())
         .take_while(|(a, b)| a == b)
         .count();
-    
+
     // Build relative path
     let mut result = PathBuf::new();
-    
+
     // Add ".." for each remaining component in from
     for _ in common_len..from_parts.len() {
         result.push("..");
     }
-    
+
     // Add remaining components from to
     for part in &to_parts[common_len..] {
         result.push(part);
     }
-    
+
     Some(result)
 }
+/// Create a symbolic link pointing to target.
+/// If `relative` is true, computes and uses a relative path from link to target.
+/// Removes any existing file at the link path before creating.
 pub fn make_symlink(target: &Path, link: &Path, relative: bool) -> std::io::Result<()> {
     if link.exists() {
         std::fs::remove_file(link).ok();
@@ -142,16 +175,19 @@ pub fn make_symlink(target: &Path, link: &Path, relative: bool) -> std::io::Resu
             } else {
                 env::current_dir()?.join(link)
             };
-            
+
             let link_dir = linkname_abs.parent().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid link path")
             })?;
-            
+
             // Calculate relative path from link directory to target
             let rel_path = relative_path(link_dir, &target).ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Cannot compute relative path")
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Cannot compute relative path",
+                )
             })?;
-            
+
             symlink(&rel_path, &linkname_abs)?;
         } else {
             symlink(target, link)?;
@@ -161,8 +197,8 @@ pub fn make_symlink(target: &Path, link: &Path, relative: bool) -> std::io::Resu
     Ok(())
 }
 
-/// Create a relative symlink from linkname pointing to target
+/// Create a relative symbolic link from linkname pointing to target.
+/// Convenience wrapper around `make_symlink(target, linkname, true)`.
 pub fn make_relative_symlink(target: &Path, linkname: &Path) -> std::io::Result<()> {
     make_symlink(target, linkname, true)
 }
-

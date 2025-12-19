@@ -20,16 +20,12 @@ pub const DEFAULT_STEAM_RUNTIME_PATH: Option<&str> = None;
 pub const DEFAULT_STEAM_RUNTIME_PATH: Option<&str> = option_env!("protontool_STEAM_RUNTIME_PATH");
 
 pub mod defaults {
-    pub const STEAM_CANDIDATES: &[&str] = &[
-        ".steam/root",
-        ".steam/steam", 
-        ".local/share/Steam",
-    ];
+    pub const STEAM_CANDIDATES: &[&str] = &[".steam/root", ".steam/steam", ".local/share/Steam"];
 
     pub const PROTON_PREFIXES: &[&str] = &[
         "Proton",
         "Proton - Experimental",
-        "Proton Experimental", 
+        "Proton Experimental",
         "Proton Hotfix",
     ];
 
@@ -70,32 +66,39 @@ pub fn get_log_dir() -> PathBuf {
     get_base_dir().join("log")
 }
 
+/// Get the Steam directory from STEAM_DIR environment variable or compile-time default.
+/// Returns None if neither is set.
 pub fn get_steam_dir() -> Option<PathBuf> {
     if let Ok(steam_dir) = env::var("STEAM_DIR") {
         return Some(PathBuf::from(steam_dir));
     }
-    
+
     DEFAULT_STEAM_DIR.map(PathBuf::from)
 }
 
+/// Get the preferred GUI provider (yad/zenity) from environment or compile-time default.
+/// Checks protontool_GUI environment variable first.
 pub fn get_gui_provider() -> Option<String> {
     if let Ok(provider) = env::var("protontool_GUI") {
         return Some(provider);
     }
-    
+
     DEFAULT_GUI_PROVIDER.map(String::from)
 }
 
+/// Get custom Steam Runtime path from STEAM_RUNTIME environment variable.
+/// Only returns a path if STEAM_RUNTIME is set to something other than "0" or "1".
 pub fn get_steam_runtime_override() -> Option<PathBuf> {
     if let Ok(runtime) = env::var("STEAM_RUNTIME") {
         if runtime != "0" && runtime != "1" && !runtime.is_empty() {
             return Some(PathBuf::from(runtime));
         }
     }
-    
+
     DEFAULT_STEAM_RUNTIME_PATH.map(PathBuf::from)
 }
 
+/// Check if Steam Runtime is explicitly disabled via STEAM_RUNTIME=0.
 pub fn is_steam_runtime_disabled() -> bool {
     env::var("STEAM_RUNTIME").map(|v| v == "0").unwrap_or(false)
 }

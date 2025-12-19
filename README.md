@@ -44,23 +44,17 @@ protontool -s GAME_NAME
 protontool -l
 ```
 
-### List available verbs
-
-```bash
-protontool --list-verbs
-```
-
 ### Launch GUI
 
 ```bash
 protontool --gui
 ```
 
-### Prefix Manager GUI
+### Manage a Custom Prefix
 
 ```bash
-protontool -p           # Select from installed games
-protontool -p APPID     # Manage specific game's prefix
+protontool --prefix ~/MyPrefix              # Manage existing prefix
+protontool --prefix ~/MyPrefix vcrun2022    # Install verbs to prefix
 ```
 
 ### Create a Custom Prefix

@@ -1,20 +1,20 @@
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
-use super::verbs::{Verb, VerbCategory, VerbAction, LocalFile};
+use super::verbs::{LocalFile, Verb, VerbAction, VerbCategory};
 
 /// Loads custom verbs from the user's config directory.
-/// 
+///
 /// Custom verbs can be defined in two ways:
-/// 
+///
 /// 1. **Shell scripts**: Place a `.sh` file in `~/.config/protontool/verbs/`
 ///    The script will be executed with environment variables set:
 ///    - WINEPREFIX, WINE, WINESERVER, PROTON_PATH
 ///    - W_TMP, W_CACHE, W_SYSTEM32_DLLS, W_SYSTEM64_DLLS
-/// 
+///
 /// 2. **TOML definitions**: Place a `.toml` file in `~/.config/protontool/verbs/`
 ///    for declarative verb definitions supporting local installers.
-/// 
+///
 /// Example TOML (sketchup.toml):
 /// ```toml
 /// [verb]
@@ -23,7 +23,7 @@ use super::verbs::{Verb, VerbCategory, VerbAction, LocalFile};
 /// title = "SketchUp 2024"
 /// publisher = "Trimble"
 /// year = "2024"
-/// 
+///
 /// [[actions]]
 /// type = "local_installer"
 /// path = "~/Downloads/SketchUpPro-2024.exe"
@@ -33,6 +33,8 @@ pub fn get_custom_verbs_dir() -> PathBuf {
     crate::config::get_verbs_dir()
 }
 
+/// Load all custom verbs from the user's verb directory.
+/// Supports both shell scripts (.sh) and TOML definitions (.toml).
 pub fn load_custom_verbs() -> Vec<Verb> {
     let verbs_dir = get_custom_verbs_dir();
     if !verbs_dir.exists() {
@@ -65,13 +67,18 @@ pub fn load_custom_verbs() -> Vec<Verb> {
 /// The verb name is derived from the filename (without extension).
 fn load_script_verb(script_path: &Path) -> Option<Verb> {
     let name = script_path.file_stem()?.to_string_lossy().to_string();
-    
+
     // Try to extract metadata from script comments
     let content = fs::read_to_string(script_path).ok()?;
     let (title, publisher, year) = parse_script_metadata(&content, &name);
-    
-    Some(Verb::new(&name, VerbCategory::Custom, &title, &publisher, &year)
-        .with_actions(vec![VerbAction::RunScript { script_path: script_path.to_path_buf() }]))
+
+    Some(
+        Verb::new(&name, VerbCategory::Custom, &title, &publisher, &year).with_actions(vec![
+            VerbAction::RunScript {
+                script_path: script_path.to_path_buf(),
+            },
+        ]),
+    )
 }
 
 /// Parse metadata from script header comments.
@@ -90,7 +97,7 @@ fn parse_script_metadata(content: &str, default_name: &str) -> (String, String, 
             continue;
         }
         let line = line.trim_start_matches('#').trim();
-        
+
         if let Some(val) = line.strip_prefix("Title:") {
             title = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("Publisher:") {
@@ -110,7 +117,7 @@ fn load_toml_verb(toml_path: &Path) -> Option<Verb> {
 }
 
 /// Parse a TOML verb definition.
-/// 
+///
 /// Simple parser that doesn't require external dependencies.
 fn parse_toml_verb(content: &str) -> Option<Verb> {
     let mut name = String::new();
@@ -128,7 +135,7 @@ fn parse_toml_verb(content: &str) -> Option<Verb> {
 
     for line in content.lines() {
         let line = line.trim();
-        
+
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -142,7 +149,11 @@ fn parse_toml_verb(content: &str) -> Option<Verb> {
         if line == "[[actions]]" {
             // Save previous action if any
             if !current_action_type.is_empty() {
-                if let Some(action) = create_action(&current_action_type, &current_action_path, &current_action_args) {
+                if let Some(action) = create_action(
+                    &current_action_type,
+                    &current_action_path,
+                    &current_action_args,
+                ) {
                     actions.push(action);
                 }
             }
@@ -180,7 +191,11 @@ fn parse_toml_verb(content: &str) -> Option<Verb> {
 
     // Save last action
     if !current_action_type.is_empty() {
-        if let Some(action) = create_action(&current_action_type, &current_action_path, &current_action_args) {
+        if let Some(action) = create_action(
+            &current_action_type,
+            &current_action_path,
+            &current_action_args,
+        ) {
             actions.push(action);
         }
     }
@@ -196,17 +211,21 @@ fn parse_toml_verb(content: &str) -> Option<Verb> {
     Some(Verb::new(&name, category, &title, &publisher, &year).with_actions(actions))
 }
 
+/// Parse a single TOML key-value line like `key = "value"`.
+/// Returns the key and value with quotes stripped.
 fn parse_toml_line(line: &str) -> Option<(String, String)> {
     let mut parts = line.splitn(2, '=');
     let key = parts.next()?.trim().to_string();
     let value = parts.next()?.trim();
-    
+
     // Remove quotes from string values
     let value = value.trim_matches('"').to_string();
-    
+
     Some((key, value))
 }
 
+/// Convert a category string to VerbCategory enum.
+/// Accepts various forms like "app", "apps", "dll", "dlls", etc.
 fn parse_category(s: &str) -> VerbCategory {
     match s.to_lowercase().as_str() {
         "app" | "apps" => VerbCategory::App,
@@ -218,6 +237,7 @@ fn parse_category(s: &str) -> VerbCategory {
     }
 }
 
+/// Expand tilde (~) in paths to the user's home directory.
 fn expand_path(path: &str) -> String {
     if path.starts_with("~/") {
         if let Ok(home) = std::env::var("HOME") {
@@ -227,29 +247,36 @@ fn expand_path(path: &str) -> String {
     path.to_string()
 }
 
+/// Parse a simple TOML string array like `["arg1", "arg2"]`.
 fn parse_string_array(s: &str) -> Vec<String> {
     // Simple array parser: ["arg1", "arg2"]
     let s = s.trim();
     if !s.starts_with('[') || !s.ends_with(']') {
         return vec![s.to_string()];
     }
-    
-    let inner = &s[1..s.len()-1];
-    inner.split(',')
+
+    let inner = &s[1..s.len() - 1];
+    inner
+        .split(',')
         .map(|s| s.trim().trim_matches('"').to_string())
         .filter(|s| !s.is_empty())
         .collect()
 }
 
+/// Create a VerbAction from parsed TOML action fields.
+/// Supports: local_installer, script, override, registry, winecfg.
 fn create_action(action_type: &str, path: &str, args: &[String]) -> Option<VerbAction> {
     match action_type {
         "local_installer" => {
             let local_file = LocalFile::new(Path::new(path), path);
-            Some(VerbAction::RunLocalInstaller { file: local_file, args: args.to_vec() })
+            Some(VerbAction::RunLocalInstaller {
+                file: local_file,
+                args: args.to_vec(),
+            })
         }
-        "script" => {
-            Some(VerbAction::RunScript { script_path: PathBuf::from(path) })
-        }
+        "script" => Some(VerbAction::RunScript {
+            script_path: PathBuf::from(path),
+        }),
         "override" => {
             let mode = args.first().map(|s| s.as_str()).unwrap_or("native");
             let dll_override = match mode {
@@ -259,14 +286,17 @@ fn create_action(action_type: &str, path: &str, args: &[String]) -> Option<VerbA
                 "builtin,native" => super::verbs::DllOverride::BuiltinNative,
                 _ => super::verbs::DllOverride::Native,
             };
-            Some(VerbAction::Override { dll: path.to_string(), mode: dll_override })
+            Some(VerbAction::Override {
+                dll: path.to_string(),
+                mode: dll_override,
+            })
         }
-        "registry" => {
-            Some(VerbAction::Registry { content: path.to_string() })
-        }
-        "winecfg" => {
-            Some(VerbAction::Winecfg { args: args.to_vec() })
-        }
+        "registry" => Some(VerbAction::Registry {
+            content: path.to_string(),
+        }),
+        "winecfg" => Some(VerbAction::Winecfg {
+            args: args.to_vec(),
+        }),
         _ => None,
     }
 }

@@ -1,18 +1,25 @@
+//! protontool-launch - Launch Windows executables using Proton.
+//!
+//! A companion binary that provides a simple way to run .exe files
+//! through an existing Steam game's or custom Wine prefix.
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-use protontool::cli::util::{ArgParser, enable_logging, exit_with_error};
-use protontool::steam::{find_steam_installations, get_steam_apps, get_steam_lib_paths, SteamApp};
+use protontool::cli::util::{enable_logging, exit_with_error, ArgParser};
 use protontool::gui::{select_steam_installation, select_steam_library_paths};
-use protontool::util::{shell_quote, which, output_to_string};
+use protontool::steam::{find_steam_installations, get_steam_apps, get_steam_lib_paths, SteamApp};
+use protontool::util::{output_to_string, shell_quote, which};
 
+/// Target environment for launching the executable.
 #[derive(Debug)]
 enum LaunchTarget {
     SteamApp(u32),
     CustomPrefix(PathBuf),
 }
 
+/// Entry point - parse arguments and launch executable via protontool CLI.
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
 
@@ -31,12 +38,24 @@ fn main() {
          STEAM_DIR: path to custom Steam installation",
     );
 
-    parser.add_flag("no_term", &["--no-term"], "Program was launched from desktop");
+    parser.add_flag(
+        "no_term",
+        &["--no-term"],
+        "Program was launched from desktop",
+    );
     parser.add_flag("verbose", &["-v", "--verbose"], "Increase log verbosity");
-    parser.add_flag("background_wineserver", &["--background-wineserver"], "Start wineserver in background before running commands");
+    parser.add_flag(
+        "background_wineserver",
+        &["--background-wineserver"],
+        "Start wineserver in background before running commands",
+    );
     parser.add_option("appid", &["--appid"], "Steam app ID");
     parser.add_option("prefix", &["--prefix"], "Use a custom prefix by name");
-    parser.add_flag("cwd_app", &["--cwd-app"], "Set working directory to app's install dir");
+    parser.add_flag(
+        "cwd_app",
+        &["--cwd-app"],
+        "Set working directory to app's install dir",
+    );
     parser.add_flag("help", &["-h", "--help"], "Show help");
 
     let parsed = match parser.parse(&args) {
@@ -91,16 +110,23 @@ fn main() {
 
     let appid: Option<u32> = parsed.get_option("appid").and_then(|s| s.parse().ok());
     let prefix_name: Option<String> = parsed.get_option("prefix").map(|s| s.to_string());
-    
+
     // Get prefixes directory
     let prefixes_dir = protontool::config::get_prefixes_dir();
-    
+
     // Determine launch mode: custom prefix, steam app, or show selection
     let target = if let Some(name) = prefix_name {
         // Use specified custom prefix
         let prefix_path = prefixes_dir.join(&name);
         if !prefix_path.exists() {
-            exit_with_error(&format!("Custom prefix '{}' not found at {}", name, prefix_path.display()), no_term);
+            exit_with_error(
+                &format!(
+                    "Custom prefix '{}' not found at {}",
+                    name,
+                    prefix_path.display()
+                ),
+                no_term,
+            );
         }
         LaunchTarget::CustomPrefix(prefix_path)
     } else if let Some(id) = appid {
@@ -109,13 +135,19 @@ fn main() {
         // Show selection dialog for both Steam apps and custom prefixes
         let extra_paths = select_steam_library_paths();
         let steam_lib_paths = get_steam_lib_paths(&steam_installation.steam_path, &extra_paths);
-        let steam_apps = get_steam_apps(&steam_installation.steam_root, &steam_installation.steam_path, &steam_lib_paths);
-        let windows_apps: Vec<_> = steam_apps.into_iter()
+        let steam_apps = get_steam_apps(
+            &steam_installation.steam_root,
+            &steam_installation.steam_path,
+            &steam_lib_paths,
+        );
+        let windows_apps: Vec<_> = steam_apps
+            .into_iter()
             .filter(|app| app.prefix_path.is_some())
             .collect();
-        
+
         // Try to show combined selection
-        match select_launch_target_gui(&windows_apps, &prefixes_dir, &steam_installation.steam_path) {
+        match select_launch_target_gui(&windows_apps, &prefixes_dir, &steam_installation.steam_path)
+        {
             Some(target) => target,
             None => {
                 exit_with_error("No target was selected.", no_term);
@@ -149,7 +181,7 @@ fn main() {
 
     cli_args.push("-c".to_string());
     cli_args.push(inner_args);
-    
+
     match target {
         LaunchTarget::SteamApp(appid) => {
             cli_args.push(appid.to_string());
@@ -163,7 +195,8 @@ fn main() {
     protontool::cli::main_cli(Some(cli_args));
 }
 
-/// GUI to select either a Steam app or custom prefix
+/// Show GUI dialog to select either a Steam app or custom prefix as launch target.
+/// Combines both options in a single list for user selection.
 fn select_launch_target_gui(
     steam_apps: &[SteamApp],
     prefixes_dir: &Path,
@@ -171,7 +204,7 @@ fn select_launch_target_gui(
 ) -> Option<LaunchTarget> {
     // Find zenity or yad
     let gui_tool = which("zenity").or_else(|| which("yad"))?;
-    
+
     // Collect custom prefixes
     let custom_prefixes: Vec<_> = std::fs::read_dir(prefixes_dir)
         .ok()
@@ -182,11 +215,11 @@ fn select_launch_target_gui(
                 .collect()
         })
         .unwrap_or_default();
-    
+
     if steam_apps.is_empty() && custom_prefixes.is_empty() {
         return None;
     }
-    
+
     let mut args = vec![
         "--list".to_string(),
         "--title".to_string(),
@@ -204,7 +237,7 @@ fn select_launch_target_gui(
         "--height".to_string(),
         "500".to_string(),
     ];
-    
+
     // Add custom prefixes first
     for entry in &custom_prefixes {
         let name = entry.file_name().to_string_lossy().to_string();
@@ -213,37 +246,34 @@ fn select_launch_target_gui(
         args.push(name);
         args.push(path);
     }
-    
+
     // Add Steam apps
     for app in steam_apps {
         args.push("[Steam]".to_string());
         args.push(app.name.clone());
         args.push(app.appid.to_string());
     }
-    
-    let output = Command::new(&gui_tool)
-        .args(&args)
-        .output()
-        .ok()?;
-    
+
+    let output = Command::new(&gui_tool).args(&args).output().ok()?;
+
     if !output.status.success() {
         return None;
     }
-    
+
     let selected = output_to_string(&output);
     if selected.is_empty() {
         return None;
     }
-    
+
     // Parse selection: "Type|Name|ID/Path"
     let parts: Vec<&str> = selected.split('|').collect();
     if parts.len() < 3 {
         return None;
     }
-    
+
     let type_col = parts[0];
     let id_or_path = parts[2];
-    
+
     if type_col == "[Custom]" {
         Some(LaunchTarget::CustomPrefix(PathBuf::from(id_or_path)))
     } else if type_col == "[Steam]" {
@@ -252,4 +282,3 @@ fn select_launch_target_gui(
         None
     }
 }
-

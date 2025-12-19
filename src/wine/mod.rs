@@ -1,18 +1,24 @@
-pub mod verbs;
-pub mod download;
-pub mod registry;
-pub mod prefix;
-pub mod util;
-pub mod custom;
+//! Wine/Proton integration module.
+//!
+//! Provides WineContext for running Wine commands, verb execution,
+//! and utilities for managing Wine prefixes.
 
-use std::path::{Path, PathBuf};
+pub mod custom;
+pub mod download;
+pub mod prefix;
+pub mod registry;
+pub mod util;
+pub mod verbs;
+
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::steam::ProtonApp;
 use crate::log as ptlog;
+use crate::steam::ProtonApp;
 pub use verbs::{Verb, VerbCategory, VerbRegistry};
 
+/// High-level Wine interface combining context, cache, and verb registry.
 pub struct Wine {
     pub wine_ctx: WineContext,
     pub cache_dir: PathBuf,
@@ -20,18 +26,24 @@ pub struct Wine {
 }
 
 impl Wine {
+    /// Create a new Wine instance with default 64-bit architecture.
     pub fn new(proton_app: &ProtonApp, prefix_path: &Path) -> Self {
         Self::new_with_arch(proton_app, prefix_path, crate::wine::WineArch::Win64)
     }
-    
-    pub fn new_with_arch(proton_app: &ProtonApp, prefix_path: &Path, arch: crate::wine::WineArch) -> Self {
+
+    /// Create a new Wine instance with specified architecture.
+    pub fn new_with_arch(
+        proton_app: &ProtonApp,
+        prefix_path: &Path,
+        arch: crate::wine::WineArch,
+    ) -> Self {
         let wine_ctx = WineContext::from_proton_with_arch(proton_app, prefix_path, arch);
-        
+
         let cache_dir = crate::config::get_cache_dir().join("wine");
         std::fs::create_dir_all(&cache_dir).ok();
-        
+
         let verb_registry = VerbRegistry::new();
-        
+
         Self {
             wine_ctx,
             cache_dir,
@@ -39,17 +51,22 @@ impl Wine {
         }
     }
 
+    /// Execute a verb by name.
     pub fn run_verb(&self, verb_name: &str) -> Result<(), String> {
-        let verb = self.verb_registry.get(verb_name)
+        let verb = self
+            .verb_registry
+            .get(verb_name)
             .ok_or_else(|| format!("Unknown verb: {}", verb_name))?;
-        
+
         verb.execute(&self.wine_ctx, &self.cache_dir)
     }
 
+    /// List verbs, optionally filtered by category.
     pub fn list_verbs(&self, category: Option<VerbCategory>) -> Vec<&Verb> {
         self.verb_registry.list(category)
     }
 
+    /// Search verbs by name or title.
     pub fn search_verbs(&self, query: &str) -> Vec<&Verb> {
         self.verb_registry.search(query)
     }
@@ -63,6 +80,7 @@ pub enum WineArch {
 }
 
 impl WineArch {
+    /// Get the WINEARCH string value ("win32" or "win64").
     pub fn as_str(&self) -> &'static str {
         match self {
             WineArch::Win32 => "win32",
@@ -70,6 +88,7 @@ impl WineArch {
         }
     }
 
+    /// Parse architecture from string (e.g., "win32", "64", "x86").
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "win32" | "32" | "x86" => Some(WineArch::Win32),
@@ -85,6 +104,8 @@ impl Default for WineArch {
     }
 }
 
+/// Context for running Wine/Proton commands with proper environment.
+/// Holds paths to Wine binaries, prefix, and environment variables.
 #[derive(Debug, Clone)]
 pub struct WineContext {
     pub wine_path: PathBuf,
@@ -98,20 +119,27 @@ pub struct WineContext {
 }
 
 impl WineContext {
+    /// Create a WineContext from a Proton installation with default 64-bit arch.
     pub fn from_proton(proton_app: &ProtonApp, prefix_path: &Path) -> Self {
         Self::from_proton_with_arch(proton_app, prefix_path, WineArch::Win64)
     }
 
-    pub fn from_proton_with_arch(proton_app: &ProtonApp, prefix_path: &Path, arch: WineArch) -> Self {
+    /// Create a WineContext from a Proton installation with specified architecture.
+    /// Sets up all Wine environment variables and DLL paths.
+    pub fn from_proton_with_arch(
+        proton_app: &ProtonApp,
+        prefix_path: &Path,
+        arch: WineArch,
+    ) -> Self {
         let proton_dist = proton_app.install_path.join("dist");
         let proton_files = proton_app.install_path.join("files");
-        
+
         let bin_dir = if proton_dist.exists() {
             proton_dist.join("bin")
         } else {
             proton_files.join("bin")
         };
-        
+
         let lib_dir = if proton_dist.exists() {
             proton_dist.clone()
         } else {
@@ -124,9 +152,18 @@ impl WineContext {
 
         let mut env = HashMap::new();
         env.insert("WINE".to_string(), wine_path.to_string_lossy().to_string());
-        env.insert("WINE64".to_string(), wine64_path.to_string_lossy().to_string());
-        env.insert("WINESERVER".to_string(), wineserver_path.to_string_lossy().to_string());
-        env.insert("WINEPREFIX".to_string(), prefix_path.to_string_lossy().to_string());
+        env.insert(
+            "WINE64".to_string(),
+            wine64_path.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "WINESERVER".to_string(),
+            wineserver_path.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "WINEPREFIX".to_string(),
+            prefix_path.to_string_lossy().to_string(),
+        );
         // Build WINEDLLPATH with all possible Wine DLL locations
         let wine_dll_paths = [
             lib_dir.join("lib64/wine/x86_64-unix"),
@@ -155,7 +192,10 @@ impl WineContext {
             .collect::<Vec<_>>()
             .join(":");
         env.insert("WINEDLLPATH".to_string(), winedllpath);
-        env.insert("WINELOADER".to_string(), wine_path.to_string_lossy().to_string());
+        env.insert(
+            "WINELOADER".to_string(),
+            wine_path.to_string_lossy().to_string(),
+        );
         env.insert("WINEARCH".to_string(), arch.as_str().to_string());
 
         Self {
@@ -170,26 +210,31 @@ impl WineContext {
         }
     }
 
+    /// Set an environment variable for Wine commands.
     pub fn set_env(&mut self, key: &str, value: &str) {
         self.env.insert(key.to_string(), value.to_string());
     }
 
+    /// Set a DLL override (e.g., "native", "builtin", "native,builtin").
     pub fn set_dll_override(&mut self, dll: &str, mode: &str) {
         self.dll_overrides.insert(dll.to_string(), mode.to_string());
     }
 
+    /// Build the WINEDLLOVERRIDES string from current overrides.
     fn build_dll_overrides_string(&self) -> String {
-        self.dll_overrides.iter()
+        self.dll_overrides
+            .iter()
             .map(|(dll, mode)| format!("{}={}", dll, mode))
             .collect::<Vec<_>>()
             .join(";")
     }
 
+    /// Apply Wine environment variables and DLL overrides to a command.
     fn apply_env(&self, cmd: &mut Command) {
         for (key, value) in &self.env {
             cmd.env(key, value);
         }
-        
+
         if !self.dll_overrides.is_empty() {
             let overrides = self.build_dll_overrides_string();
             if let Ok(existing) = std::env::var("WINEDLLOVERRIDES") {
@@ -219,10 +264,15 @@ impl WineContext {
     /// Run wine with full control over working directory behavior.
     /// - `cwd`: Explicit working directory, or None to auto-detect from first arg
     /// - `auto_cwd`: If true and cwd is None, change to executable's directory
-    pub fn run_wine_ex(&self, args: &[&str], cwd: Option<&Path>, auto_cwd: bool) -> std::io::Result<Output> {
+    pub fn run_wine_ex(
+        &self,
+        args: &[&str],
+        cwd: Option<&Path>,
+        auto_cwd: bool,
+    ) -> std::io::Result<Output> {
         let mut cmd = Command::new(&self.wine_path);
         cmd.args(args);
-        
+
         // Determine working directory
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
@@ -239,23 +289,23 @@ impl WineContext {
                 }
             }
         }
-        
+
         self.apply_env(&mut cmd);
         let output = cmd.output()?;
-        
+
         // Log the output with error scanning
         let executable = args.first().unwrap_or(&"wine");
         self.log_output(executable, &output);
-        
+
         Ok(output)
     }
-    
+
     /// Log output from a wine command and scan for known errors
     pub fn log_output(&self, executable: &str, output: &Output) {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let exit_code = output.status.code().unwrap_or(-1);
-        
+
         ptlog::log_executable_output(executable, &stdout, &stderr, exit_code);
     }
 
@@ -328,7 +378,7 @@ impl WineContext {
         }
         cmd.args(&cleaned_args);
         cmd.env("WINEPREFIX", &self.prefix_path);
-        
+
         if cleaned_args.contains(&"-p") {
             cmd.spawn()?;
             Ok(Output {
